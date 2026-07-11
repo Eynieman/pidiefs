@@ -19,10 +19,14 @@ venv/
 .venv/
 .env
 .env.local
-*.sqlite3
+.env.*
 
 # ChromaDB
 data/chroma/
+
+# PDFs (excepto metadata.json)
+data/pdfs/*
+!data/pdfs/metadata.json
 
 # IDE
 .vscode/
