@@ -1,0 +1,16 @@
+{
+  "name": "pageyn",
+  "version": "1.0.0",
+  "description": "PDF Knowledge Base — RAG Pipeline",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "python3 -m uvicorn backend.main:app --reload --port 8000",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "install:all": "cd frontend && npm install && cd ../backend && pip3 install -r requirements.txt"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
