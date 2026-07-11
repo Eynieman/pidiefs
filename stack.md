@@ -23,7 +23,7 @@ Arquitectura de una aplicación web para consultar PDFs mediante un pipeline de 
      ▼               ▼                           ▼
 ┌─────────────┐ ┌──────────────┐ ┌──────────────────────────────┐
 │  PDF Text   │ │  RAG Chain   │ │  Document Metadata Store     │
-│  Extraction │ │  (LangChain) │ │  (SQLite)                    │
+│  Extraction │ │  (LangChain) │ │  (JSON)                      │
 └──────┬──────┘ └──────┬───────┘ └──────────────────────────────┘
        │               │
        ▼               ▼
@@ -55,7 +55,7 @@ Arquitectura de una aplicación web para consultar PDFs mediante un pipeline de 
 | **Vector Store**  | ChromaDB (embedded)          | Gratuito, local, persistente, sin servidor externo  |
 | **LLM**           | Groq API — Llama 3.3 70B    | Gratuito (14,400 req/día), ultra rápido (LPU)      |
 | **Orchestration** | LangChain                    | Pipeline RAG completo con retriever + chain          |
-| **DB Metadata**   | SQLite                       | Ligero, sin setup, almacena info de documentos      |
+| **DB Metadata**   | JSON file                   | Ligero, sin setup, almacena info de documentos      |
 | **Dev Scripts**   | concurrently                 | Arranca backend + frontend con un solo comando      |
 
 ---
@@ -104,7 +104,7 @@ PDF Upload → Extracción texto (PyPDF/pdfplumber)
     → Chunking (LangChain, 500 chars, 50 overlap)
     → Embeddings (Sentence Transformers, local)
     → Almacenar en ChromaDB
-    → Guardar metadata en SQLite
+    → Guardar metadata en JSON
 ```
 
 ### 5.2 Consulta (Query)
@@ -127,6 +127,7 @@ pageyn/
 │   │   ├── layout.tsx
 │   │   ├── page.tsx           # Dashboard principal
 │   │   ├── upload/page.tsx    # Subir PDFs
+│   │   ├── documents/page.tsx # Listar y eliminar PDFs
 │   │   └── chat/page.tsx      # Consultar knowledge base
 │   ├── components/
 │   │   ├── FileUpload.tsx
@@ -264,7 +265,7 @@ TOP_K_RESULTS=5
 2. **Embeddings locales**: Sentence Transformers no tiene costo ni límite de API
 3. **ChromaDB embebido**: Sin servidor vectorial separado
 4. **FastAPI separado de Next.js**: Permite escalar independientemente
-5. **SQLite para metadata**: Ligero, sin configuración
+5. **JSON para metadata**: Ligero, sin configuración, archivo único
 6. **LangChain como orquestador**: Pipeline RAG completo con integraciones nativas
 7. **concurrently en raíz**: Un solo comando `npm run dev` arranca backend + frontend
 

@@ -26,7 +26,7 @@ async def query_knowledge_base(request: QueryRequest):
 
     query_embedding = embed_query(request.question)
     top_k = min(request.top_k, TOP_K_RESULTS)
-    similar_docs = query_similar(query_embedding, top_k=top_k)
+    similar_docs = query_similar(query_embedding, top_k=top_k, doc_id=request.doc_id)
 
     if not similar_docs:
         return QueryResponse(

@@ -44,12 +44,14 @@ def add_documents(documents: list[Document], doc_id: str) -> int:
     return len(ids)
 
 
-def query_similar(query_embedding: list[float], top_k: int = 5) -> list[dict]:
+def query_similar(query_embedding: list[float], top_k: int = 5, doc_id: str | None = None) -> list[dict]:
     collection = get_collection()
 
+    where = {"doc_id": doc_id} if doc_id else None
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=top_k,
+        where=where,
         include=["documents", "metadatas", "distances"],
     )
 
