@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
+import { NavLinks } from "@/components/NavLinks";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -34,29 +35,7 @@ export default function RootLayout({
             <Link href="/" className="text-lg font-bold tracking-tight">
               Pidiefs
             </Link>
-            <nav className="flex gap-4 text-sm">
-              <Link href="/" className="hover:text-blue-600 transition-colors">
-                Inicio
-              </Link>
-              <Link
-                href="/upload"
-                className="hover:text-blue-600 transition-colors"
-              >
-                Subir PDF
-              </Link>
-              <Link
-                href="/documents"
-                className="hover:text-blue-600 transition-colors"
-              >
-                Documentos
-              </Link>
-              <Link
-                href="/chat"
-                className="hover:text-blue-600 transition-colors"
-              >
-                Consultar
-              </Link>
-            </nav>
+            <NavLinks />
           </div>
         </header>
         <main className="flex-1">{children}</main>

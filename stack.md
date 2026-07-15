@@ -11,6 +11,7 @@ Arquitectura de una aplicación web para consultar PDFs mediante un pipeline de 
 │                        FRONTEND (Next.js)                       │
 │  ┌───────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
 │  │ Upload UI │  │ Chat / Query │  │ Document List / Status   │  │
+│  │(drag&drop)│  │ (markdown)   │  │ (persistencia local)     │  │
 │  └─────┬─────┘  └──────┬───────┘  └────────────┬─────────────┘  │
 └────────┼───────────────┼───────────────────────┼────────────────┘
          │               │                       │
@@ -45,18 +46,20 @@ Arquitectura de una aplicación web para consultar PDFs mediante un pipeline de 
 
 ## 2. Stack Tecnológico
 
-| Capa              | Tecnología                   | Justificación                                      |
-| ----------------- | ---------------------------- | -------------------------------------------------- |
-| **Frontend**      | Next.js 14+ (App Router)     | SSR, React, API routes, upload UI con drag & drop   |
-| **Backend API**   | FastAPI (Python)             | Async, rápido, OpenAPI docs automáticas             |
-| **PDF Extraction**| PyPDF + pdfplumber           | Extracción robusta de texto y tablas de PDFs        |
-| **Text Splitting**| LangChain TextSplitters      | Chunking semántico con overlap configurable         |
-| **Embeddings**    | Sentence Transformers        | Modelo `all-MiniLM-L6-v2` (384 dims, local, gratis)|
-| **Vector Store**  | ChromaDB (embedded)          | Gratuito, local, persistente, sin servidor externo  |
-| **LLM**           | Groq API — Llama 3.3 70B    | Gratuito (14,400 req/día), ultra rápido (LPU)      |
-| **Orchestration** | LangChain                    | Pipeline RAG completo con retriever + chain          |
-| **DB Metadata**   | JSON file                   | Ligero, sin setup, almacena info de documentos      |
-| **Dev Scripts**   | concurrently                 | Arranca backend + frontend con un solo comando      |
+| Capa              | Tecnología                        | Justificación                                      |
+| ----------------- | --------------------------------- | -------------------------------------------------- |
+| **Frontend**      | Next.js 16 (App Router)           | SSR, React 19, API routes, drag & drop real         |
+| **UI**            | Tailwind CSS 4 + react-markdown   | Estilos utilitarios, rendering de markdown en chat  |
+| **Backend API**   | FastAPI (Python)                  | Async, rápido, OpenAPI docs automáticas             |
+| **PDF Extraction**| PyPDF + pdfplumber                | Extracción robusta de texto y tablas de PDFs        |
+| **Text Splitting**| LangChain TextSplitters           | Chunking semántico con overlap configurable         |
+| **Embeddings**    | Sentence Transformers             | Modelo `all-MiniLM-L6-v2` (384 dims, local, gratis)|
+| **Vector Store**  | ChromaDB (embedded)               | Gratuito, local, persistente, sin servidor externo  |
+| **LLM**           | Groq API — Llama 3.3 70B         | Gratuito (14,400 req/día), ultra rápido (LPU)      |
+| **Orchestration** | LangChain                         | Pipeline RAG completo con retriever + chain          |
+| **DB Metadata**   | JSON file                         | Ligero, sin setup, almacena info de documentos      |
+| **Testing**       | Vitest + pytest                   | Tests unitarios frontend y backend                  |
+| **Dev Scripts**   | concurrently                      | Arranca backend + frontend con un solo comando      |
 
 ---
 
@@ -100,7 +103,8 @@ Arquitectura de una aplicación web para consultar PDFs mediante un pipeline de 
 
 ### 5.1 Ingesta de PDFs
 ```
-PDF Upload → Extracción texto (PyPDF/pdfplumber)
+PDF Upload (max 50 MB) → Validación tamaño + extensión
+    → Extracción texto (PyPDF/pdfplumber)
     → Chunking (LangChain, 500 chars, 50 overlap)
     → Embeddings (Sentence Transformers, local)
     → Almacenar en ChromaDB
@@ -113,7 +117,7 @@ User Query → Embedding de la query (local)
     → Buscar top-K chunks similares en ChromaDB
     → Construir prompt con contexto + pregunta
     → Enviar a Groq API (Llama 3.3 70B, cloud)
-    → Respuesta con fuentes citadas
+    → Respuesta con fuentes citadas (rendered como markdown)
 ```
 
 ---
@@ -124,20 +128,43 @@ User Query → Embedding de la query (local)
 pageyn/
 ├── frontend/                  # Next.js App
 │   ├── app/
-│   │   ├── layout.tsx
+│   │   ├── layout.tsx         # Layout raíz con nav
 │   │   ├── page.tsx           # Dashboard principal
-│   │   ├── upload/page.tsx    # Subir PDFs
-│   │   ├── documents/page.tsx # Listar y eliminar PDFs
-│   │   └── chat/page.tsx      # Consultar knowledge base
+│   │   ├── error.tsx          # Error boundary root
+│   │   ├── global-error.tsx   # Error boundary layout
+│   │   ├── upload/
+│   │   │   ├── page.tsx       # Subir PDFs (drag & drop)
+│   │   │   └── error.tsx      # Error boundary upload
+│   │   ├── documents/
+│   │   │   ├── page.tsx       # Listar y eliminar PDFs
+│   │   │   └── error.tsx      # Error boundary documents
+│   │   └── chat/
+│   │       ├── page.tsx       # Consultar knowledge base
+│   │       └── error.tsx      # Error boundary chat
 │   ├── components/
-│   │   ├── FileUpload.tsx
-│   │   ├── ChatInterface.tsx
-│   │   ├── DocumentList.tsx
-│   │   └── SourceCard.tsx
+│   │   ├── DocumentCard.tsx   # Card de documento
+│   │   ├── EmptyState.tsx     # Estado vacío genérico
+│   │   ├── ErrorFallback.tsx  # Fallback de error boundaries
+│   │   ├── LoadingSpinner.tsx # Spinner de carga
+│   │   ├── MarkdownMessage.tsx# Rendering markdown
+│   │   ├── SourceCitation.tsx # Fuentes de respuestas
+│   │   └── StatusCard.tsx     # Cards de éxito/error
+│   ├── hooks/
+│   │   └── useChatPersistence.ts # Persistencia chat en localStorage
+│   ├── __tests__/             # Tests frontend (Vitest)
+│   │   ├── ErrorFallback.test.tsx
+│   │   ├── SourceCitation.test.tsx
+│   │   ├── EmptyState.test.tsx
+│   │   ├── StatusCard.test.tsx
+│   │   ├── LoadingSpinner.test.tsx
+│   │   └── MarkdownMessage.test.tsx
+│   ├── vitest.config.ts       # Config Vitest
+│   ├── setupTests.ts          # Setup testing-library
 │   └── package.json
 │
 ├── backend/                   # FastAPI
 │   ├── main.py                # App FastAPI
+│   ├── config.py              # Configuración (incluye MAX_FILE_SIZE)
 │   ├── routers/
 │   │   ├── documents.py       # CRUD documentos
 │   │   └── query.py           # Endpoint de consulta
@@ -149,12 +176,16 @@ pageyn/
 │   │   └── llm.py             # Integración Groq API
 │   ├── models/
 │   │   └── document.py        # Modelos Pydantic
-│   ├── config.py              # Configuración
+│   ├── tests/                 # Tests backend (pytest)
+│   │   ├── conftest.py        # Fixtures AsyncClient
+│   │   ├── test_documents.py  # Tests upload/list/delete
+│   │   └── test_query.py      # Tests query/health
+│   ├── pytest.ini             # Config pytest
 │   └── requirements.txt
 │
 ├── data/
 │   ├── chroma/                # ChromaDB persistente
-│   └── pdfs/                  # PDFs originales
+│   └── pdfs/                  # PDFs originales + metadata.json
 │
 ├── package.json               # Scripts de ejecución (raíz)
 ├── stack.md                   # Este archivo
@@ -197,21 +228,48 @@ groq==0.13.0
 pydantic==2.10.4
 aiosqlite==0.20.0
 python-dotenv==1.0.1
+pytest==8.3.4
+pytest-asyncio==0.25.0
+httpx==0.28.1
 ```
 
 ### Frontend (package.json)
 ```json
 {
-  "name": "pageyn-frontend",
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
   "dependencies": {
-    "next": "^14.2.0",
-    "react": "^18.3.0",
-    "react-dom": "^18.3.0",
-    "lucide-react": "^0.460.0"
+    "@tailwindcss/typography": "^0.5.20",
+    "lucide-react": "^1.24.0",
+    "next": "16.2.10",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
-    "tailwindcss": "^3.4.0",
-    "typescript": "^5.0.0"
+    "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4.4.1",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.10",
+    "jsdom": "^29.1.1",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   }
 }
 ```
@@ -222,7 +280,7 @@ python-dotenv==1.0.1
 
 | Método  | Ruta              | Descripción                           |
 | ------- | ----------------- | ------------------------------------- |
-| `POST`  | `/api/documents`  | Subir PDF, extraer texto, indexar     |
+| `POST`  | `/api/documents`  | Subir PDF (max 50 MB), extraer texto, indexar |
 | `GET`   | `/api/documents`  | Listar documentos indexados           |
 | `DELETE`| `/api/documents/{id}` | Eliminar documento y sus embeddings |
 | `POST`  | `/api/query`      | Consultar la knowledge base           |
@@ -236,8 +294,6 @@ python-dotenv==1.0.1
 # backend/.env
 GROQ_API_KEY=gsk_...
 EMBEDDING_MODEL=all-MiniLM-L6-v2
-CHROMA_PERSIST_DIR=./data/chroma
-PDF_STORAGE_DIR=./data/pdfs
 CHUNK_SIZE=500
 CHUNK_OVERLAP=50
 TOP_K_RESULTS=5
@@ -268,6 +324,12 @@ TOP_K_RESULTS=5
 5. **JSON para metadata**: Ligero, sin configuración, archivo único
 6. **LangChain como orquestador**: Pipeline RAG completo con integraciones nativas
 7. **concurrently en raíz**: Un solo comando `npm run dev` arranca backend + frontend
+8. **Error boundaries por ruta**: `error.tsx` en cada segmento + `global-error.tsx` para el layout
+9. **Drag-and-drop real**: API nativa de HTML5, validación PDF + tamaño antes de enviar
+10. **Markdown en chat**: react-markdown con estilos prose para renderizar respuestas del LLM
+11. **Persistencia del chat**: localStorage con hook `useChatPersistence`, máx 50 mensajes
+12. **Límite de 50 MB**: Validación frontend + backend, barra de progreso con colores
+13. **Tests unitarios**: Vitest (frontend, 13 tests) + pytest (backend, 5 tests)
 
 ---
 
@@ -297,6 +359,12 @@ npm run dev                          # arranca backend (8000) + frontend (3000)
 npm run dev:backend                  # solo FastAPI en :8000
 npm run dev:frontend                 # solo Next.js en :3000
 npm run build                        # build de producción del frontend
+```
+
+### Tests
+```bash
+cd frontend && npm run test          # tests frontend (Vitest)
+cd backend && pytest                 # tests backend (pytest)
 ```
 
 ### URLs

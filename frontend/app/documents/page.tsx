@@ -1,13 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import {
-  FileText,
-  Trash2,
-  Loader2,
-  AlertCircle,
-  FolderOpen,
-} from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { AlertCircle, FolderOpen, Search } from "lucide-react";
+import { DocumentCard } from "@/components/DocumentCard";
+import { LoadingSpinner } from "@/components/LoadingSpinner";
+import { EmptyState } from "@/components/EmptyState";
 
 interface Document {
   id: string;
@@ -22,25 +19,28 @@ export default function DocumentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
 
-  const fetchDocuments = async () => {
+  const fetchDocuments = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch("http://localhost:8000/api/documents");
+      const res = await fetch("/api/documents");
       if (!res.ok) throw new Error("Error al cargar documentos");
       const data = await res.json();
       setDocuments(data);
-    } catch (err: any) {
-      setError(err.message || "Error de conexion con el backend");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error de conexion con el backend";
+      setError(message);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDocuments();
-  }, []);
+  }, [fetchDocuments]);
 
   const handleDelete = async (doc: Document) => {
     const confirmed = window.confirm(
@@ -50,29 +50,20 @@ export default function DocumentsPage() {
 
     try {
       setDeletingId(doc.id);
-      const res = await fetch(
-        `http://localhost:8000/api/documents/${doc.id}`,
-        { method: "DELETE" }
-      );
+      const res = await fetch(`/api/documents/${doc.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Error al eliminar");
       setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
-    } catch (err: any) {
-      alert(err.message || "Error al eliminar el documento");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error al eliminar el documento";
+      alert(message);
     } finally {
       setDeletingId(null);
     }
   };
 
-  const formatDate = (ts: string) => {
-    const d = new Date(parseFloat(ts) * 1000);
-    return d.toLocaleDateString("es-ES", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
+  const filtered = documents.filter((d) =>
+    d.filename.toLowerCase().includes(searchTerm.toLowerCase()),
+  );
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-12">
@@ -80,7 +71,7 @@ export default function DocumentsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Documentos</h1>
           <p className="mt-1 text-sm text-gray-500">
-            {documents.length} PDF{documents.length !== 1 ? "s" : ""} subidos
+            {filtered.length} de {documents.length} PDF{documents.length !== 1 ? "s" : ""}
           </p>
         </div>
         <button
@@ -92,11 +83,21 @@ export default function DocumentsPage() {
         </button>
       </div>
 
-      {loading && (
-        <div className="mt-12 flex flex-col items-center justify-center text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-          <p className="mt-3 text-sm text-gray-500">Cargando documentos...</p>
+      {!loading && !error && documents.length > 0 && (
+        <div className="relative mt-6">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Buscar por nombre..."
+            className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-4 text-sm outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+          />
         </div>
+      )}
+
+      {loading && (
+        <LoadingSpinner message="Cargando documentos..." />
       )}
 
       {error && (
@@ -118,53 +119,30 @@ export default function DocumentsPage() {
       )}
 
       {!loading && !error && documents.length === 0 && (
-        <div className="mt-12 flex flex-col items-center justify-center text-center">
-          <FolderOpen className="h-12 w-12 text-gray-300" />
-          <p className="mt-4 text-lg font-medium text-gray-400">
-            No hay documentos
-          </p>
-          <p className="mt-1 text-sm text-gray-300">
-            Sube un PDF para comenzar
-          </p>
-        </div>
+        <EmptyState
+          icon={FolderOpen}
+          title="No hay documentos"
+          description="Sube un PDF para comenzar"
+        />
       )}
 
-      {!loading && documents.length > 0 && (
+      {!loading && !error && documents.length > 0 && filtered.length === 0 && (
+        <EmptyState
+          icon={Search}
+          title="Sin resultados"
+          description={`No se encontraron documentos para "${searchTerm}"`}
+        />
+      )}
+
+      {!loading && filtered.length > 0 && (
         <div className="mt-6 space-y-3">
-          {documents.map((doc) => (
-            <div
+          {filtered.map((doc) => (
+            <DocumentCard
               key={doc.id}
-              className="flex items-center justify-between rounded-xl border border-gray-200 bg-white p-4 shadow-sm transition hover:shadow-md"
-            >
-              <div className="flex items-start gap-3">
-                <FileText className="mt-0.5 h-5 w-5 flex-shrink-0 text-blue-500" />
-                <div>
-                  <p className="font-medium text-gray-900">{doc.filename}</p>
-                  <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-gray-500">
-                    <span>
-                      {doc.pages} pagina{doc.pages !== 1 ? "s" : ""}
-                    </span>
-                    <span>
-                      {doc.chunks} chunk{doc.chunks !== 1 ? "s" : ""}
-                    </span>
-                    <span>{formatDate(doc.uploaded_at)}</span>
-                  </div>
-                  <p className="mt-1 text-[10px] text-gray-300">ID: {doc.id}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => handleDelete(doc)}
-                disabled={deletingId === doc.id}
-                className="flex-shrink-0 rounded-lg p-2 text-gray-400 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
-                title="Eliminar documento"
-              >
-                {deletingId === doc.id ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Trash2 className="h-4 w-4" />
-                )}
-              </button>
-            </div>
+              document={doc}
+              onDelete={handleDelete}
+              isDeleting={deletingId === doc.id}
+            />
           ))}
         </div>
       )}

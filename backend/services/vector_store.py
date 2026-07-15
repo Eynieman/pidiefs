@@ -79,4 +79,8 @@ def delete_document(doc_id: str) -> int:
 
 def get_document_count() -> int:
     collection = get_collection()
-    return collection.count()
+    results = collection.get(include=["metadatas"])
+    if not results["metadatas"]:
+        return 0
+    doc_ids = {m.get("doc_id") for m in results["metadatas"]}
+    return len(doc_ids)

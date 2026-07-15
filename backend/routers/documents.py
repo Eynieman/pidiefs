@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
-from backend.config import PDF_DIR
+from backend.config import PDF_DIR, MAX_FILE_SIZE
 from backend.models.document import DocumentResponse
 from backend.services.pdf_extractor import extract_text
 from backend.services.text_splitter import split_pages
@@ -28,6 +28,12 @@ def _save_metadata(data: dict):
 async def upload_document(file: UploadFile = File(...)):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos PDF")
+
+    if file.size and file.size > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"El archivo excede el limite de {MAX_FILE_SIZE // (1024 * 1024)} MB",
+        )
 
     doc_id = uuid.uuid4().hex[:12]
     pdf_path = PDF_DIR / f"{doc_id}_{file.filename}"

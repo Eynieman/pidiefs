@@ -1,7 +1,10 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { Send, Loader2, FileText } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Send, Loader2, Trash2, Lightbulb } from "lucide-react";
+import { SourceCitation } from "@/components/SourceCitation";
+import { MarkdownMessage } from "@/components/MarkdownMessage";
+import { useChatPersistence } from "@/hooks/useChatPersistence";
 
 interface Document {
   id: string;
@@ -10,25 +13,24 @@ interface Document {
   chunks: number;
 }
 
-interface Source {
-  content: string;
-  source: string;
-  page: number;
-  score: number;
-}
-
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-  sources?: Source[];
-}
+const suggestions = [
+  "¿De qué trata este documento?",
+  "¿Cuáles son los puntos principales?",
+  "Resume el contenido",
+  "¿Qué conclusiones se pueden extraer?",
+];
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const {
+    messages,
+    setMessages,
+    selectedDocId,
+    setSelectedDocId,
+    clearChat,
+  } = useChatPersistence();
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [selectedDocId, setSelectedDocId] = useState<string>("all");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -36,14 +38,14 @@ export default function ChatPage() {
   }, [messages]);
 
   useEffect(() => {
-    fetch("http://localhost:8000/api/documents")
+    fetch("/api/documents")
       .then((res) => res.json())
       .then((data) => setDocuments(data))
       .catch(() => {});
   }, []);
 
-  const handleSend = async () => {
-    const question = input.trim();
+  const handleSend = useCallback(async (overrideQuestion?: string) => {
+    const question = (overrideQuestion ?? input).trim();
     if (!question || loading) return;
 
     setInput("");
@@ -56,7 +58,7 @@ export default function ChatPage() {
     }
 
     try {
-      const res = await fetch("http://localhost:8000/api/query", {
+      const res = await fetch("/api/query/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -67,23 +69,67 @@ export default function ChatPage() {
         throw new Error(data.detail || "Error al consultar");
       }
 
-      const data = await res.json();
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No se pudo leer la respuesta");
+
+      const decoder = new TextDecoder();
+      let sources: { content: string; source: string; page: number; score: number }[] = [];
+      let answer = "";
+
+      setMessages((prev) => [...prev, { role: "assistant", content: "", sources: [] }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const text = decoder.decode(value, { stream: true });
+        const lines = text.split("\n");
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6);
+          if (data === "[DONE]") break;
+
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.type === "sources") {
+              sources = parsed.sources;
+              setMessages((prev) => {
+                const msgs = [...prev];
+                const last = msgs[msgs.length - 1];
+                if (last.role === "assistant") {
+                  msgs[msgs.length - 1] = { ...last, sources };
+                }
+                return msgs;
+              });
+            } else if (parsed.type === "token") {
+              answer += parsed.content;
+              const content = answer;
+              setMessages((prev) => {
+                const msgs = [...prev];
+                const last = msgs[msgs.length - 1];
+                if (last.role === "assistant") {
+                  msgs[msgs.length - 1] = { ...last, content };
+                }
+                return msgs;
+              });
+            }
+          } catch {
+            // skip malformed SSE lines
+          }
+        }
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "No se pudo conectar con el backend";
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: data.answer, sources: data.sources },
-      ]);
-    } catch (err: any) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: `Error: ${err.message || "No se pudo conectar con el backend"}`,
-        },
+        { role: "assistant", content: `Error: ${message}` },
       ]);
     } finally {
       setLoading(false);
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input, loading, selectedDocId]);
 
   const selectedDoc = documents.find((d) => d.id === selectedDocId);
 
@@ -106,6 +152,15 @@ export default function ChatPage() {
             </option>
           ))}
         </select>
+        {messages.length > 0 && (
+          <button
+            onClick={clearChat}
+            className="rounded-lg p-2 text-gray-400 transition hover:bg-red-50 hover:text-red-600"
+            title="Limpiar chat"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto py-6">
@@ -119,6 +174,19 @@ export default function ChatPage() {
                 ? `Buscando en: ${selectedDoc.filename}`
                 : "Buscando en todos los documentos"}
             </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-2">
+              {suggestions.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => handleSend(s)}
+                  disabled={loading}
+                  className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 transition hover:border-blue-300 hover:text-blue-600 disabled:opacity-50"
+                >
+                  <Lightbulb className="h-3 w-3" />
+                  {s}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -135,31 +203,12 @@ export default function ChatPage() {
                     : "bg-white text-gray-900 shadow-sm border border-gray-200"
                 }`}
               >
-                <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
-
-                {msg.sources && msg.sources.length > 0 && (
-                  <div className="mt-3 border-t border-gray-100 pt-3">
-                    <p className="text-xs font-medium text-gray-400 mb-2">
-                      Fuentes:
-                    </p>
-                    <div className="space-y-1.5">
-                      {msg.sources.map((src, j) => (
-                        <div
-                          key={j}
-                          className="flex items-start gap-1.5 text-xs text-gray-500"
-                        >
-                          <FileText className="mt-0.5 h-3 w-3 flex-shrink-0" />
-                          <span>
-                            {src.source} p.{src.page}{" "}
-                            <span className="text-gray-300">
-                              ({(src.score * 100).toFixed(0)}%)
-                            </span>
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                {msg.role === "assistant" ? (
+                  <MarkdownMessage content={msg.content} />
+                ) : (
+                  <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
                 )}
+                {msg.sources && <SourceCitation sources={msg.sources} />}
               </div>
             </div>
           ))}
@@ -167,7 +216,10 @@ export default function ChatPage() {
           {loading && (
             <div className="flex justify-start">
               <div className="rounded-xl bg-white px-4 py-3 shadow-sm border border-gray-200">
-                <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                <span className="flex items-center gap-2 text-sm text-gray-400">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Pensando...
+                </span>
               </div>
             </div>
           )}
@@ -188,7 +240,7 @@ export default function ChatPage() {
             className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
           />
           <button
-            onClick={handleSend}
+            onClick={() => handleSend()}
             disabled={!input.trim() || loading}
             className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >

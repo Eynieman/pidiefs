@@ -11,16 +11,14 @@ def get_client() -> Groq:
     return _client
 
 
-def generate_answer(question: str, context_docs: list[dict]) -> str:
-    client = get_client()
-
+def _build_messages(question: str, context_docs: list[dict]) -> list[dict]:
     context = "\n\n---\n\n".join(
         f"[Fuente: {doc['metadata'].get('source', 'desconocido')}, "
         f"Página {doc['metadata'].get('page', '?')}]\n{doc['content']}"
         for doc in context_docs
     )
 
-    messages = [
+    return [
         {
             "role": "system",
             "content": (
@@ -40,6 +38,11 @@ def generate_answer(question: str, context_docs: list[dict]) -> str:
         },
     ]
 
+
+def generate_answer(question: str, context_docs: list[dict]) -> str:
+    client = get_client()
+    messages = _build_messages(question, context_docs)
+
     response = client.chat.completions.create(
         model=GROQ_MODEL,
         messages=messages,
@@ -48,3 +51,20 @@ def generate_answer(question: str, context_docs: list[dict]) -> str:
     )
 
     return response.choices[0].message.content
+
+
+def generate_answer_stream(question: str, context_docs: list[dict]):
+    client = get_client()
+    messages = _build_messages(question, context_docs)
+
+    stream = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=messages,
+        temperature=0.3,
+        max_tokens=2048,
+        stream=True,
+    )
+
+    for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
