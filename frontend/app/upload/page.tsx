@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { Upload, FileText, Loader2, X, CheckCircle2, AlertCircle } from "lucide-react";
+import { Upload, FileText, Loader2, X, CheckCircle2, AlertCircle, AlertTriangle } from "lucide-react";
 import { StatusCard } from "@/components/StatusCard";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
@@ -11,11 +11,12 @@ interface UploadResult {
   filename: string;
   pages: number;
   chunks: number;
+  duplicate_of: string | null;
 }
 
 interface FileItem {
   file: File;
-  status: "pending" | "uploading" | "processing" | "done" | "error";
+  status: "pending" | "uploading" | "processing" | "done" | "error" | "duplicate";
   result?: UploadResult;
   error?: string;
 }
@@ -110,12 +111,21 @@ export default function UploadPage() {
           throw new Error(data.detail || "Error al subir");
         }
 
-        const data = await res.json();
-        setFiles((prev) =>
-          prev.map((f, i) =>
-            i === idx ? { ...f, status: "done", result: data } : f,
-          ),
-        );
+        const data: UploadResult = await res.json();
+
+        if (data.duplicate_of) {
+          setFiles((prev) =>
+            prev.map((f, i) =>
+              i === idx ? { ...f, status: "duplicate", result: data } : f,
+            ),
+          );
+        } else {
+          setFiles((prev) =>
+            prev.map((f, i) =>
+              i === idx ? { ...f, status: "done", result: data } : f,
+            ),
+          );
+        }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Error de conexion";
         setFiles((prev) =>
@@ -131,12 +141,13 @@ export default function UploadPage() {
 
   const pendingCount = files.filter((f) => f.status === "pending").length;
   const doneCount = files.filter((f) => f.status === "done").length;
+  const duplicateCount = files.filter((f) => f.status === "duplicate").length;
   const hasFiles = files.length > 0;
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-12">
-      <h1 className="text-2xl font-bold text-gray-900">Subir PDF</h1>
-      <p className="mt-1 text-sm text-gray-500">
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Subir PDF</h1>
+      <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
         Se extraera el texto, se generaran embeddings y se indexara en la base vectorial
       </p>
 
@@ -147,8 +158,8 @@ export default function UploadPage() {
         onDrop={handleDrop}
         className={`mt-8 rounded-xl border-2 border-dashed p-10 text-center transition ${
           isDragging
-            ? "border-blue-500 bg-blue-50"
-            : "border-gray-300 bg-white hover:border-blue-400"
+            ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
+            : "border-gray-300 bg-white hover:border-blue-400 dark:border-gray-600 dark:bg-gray-800 dark:hover:border-blue-500"
         }`}
       >
         <input
@@ -161,15 +172,15 @@ export default function UploadPage() {
           id="file-input"
         />
         <label htmlFor="file-input" className="cursor-pointer">
-          <Upload className="mx-auto h-10 w-10 text-gray-400" />
-          <p className="mt-3 text-sm text-gray-600">
+          <Upload className="mx-auto h-10 w-10 text-gray-400 dark:text-gray-500" />
+          <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">
             {isDragging ? (
-              <span className="font-medium text-blue-600">Suelta los PDFs aqui</span>
+              <span className="font-medium text-blue-600 dark:text-blue-400">Suelta los PDFs aqui</span>
             ) : (
               "Arrastra varios PDFs o click para seleccionar"
             )}
           </p>
-          <p className="mt-1 text-xs text-gray-400">
+          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
             Solo archivos .pdf — Maximo 50 MB c/u
           </p>
         </label>
@@ -180,17 +191,21 @@ export default function UploadPage() {
           {files.map((item, i) => (
             <div
               key={i}
-              className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2"
+              className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${
+                item.status === "duplicate"
+                  ? "border-yellow-200 bg-yellow-50 dark:border-yellow-700 dark:bg-yellow-900/20"
+                  : "border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
+              }`}
             >
-              <FileText className="h-4 w-4 flex-shrink-0 text-gray-400" />
+              <FileText className="h-4 w-4 flex-shrink-0 text-gray-400 dark:text-gray-500" />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm text-gray-700">{item.file.name}</p>
-                <p className="text-xs text-gray-400">{formatSize(item.file.size)}</p>
+                <p className="truncate text-sm text-gray-700 dark:text-gray-200">{item.file.name}</p>
+                <p className="text-xs text-gray-400 dark:text-gray-500">{formatSize(item.file.size)}</p>
               </div>
               {item.status === "pending" && (
                 <button
                   onClick={() => removeFile(i)}
-                  className="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                  className="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -199,15 +214,23 @@ export default function UploadPage() {
                 <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
               )}
               {item.status === "done" && item.result && (
-                <span className="text-xs text-green-600">
+                <span className="text-xs text-green-600 dark:text-green-400">
                   {item.result.chunks} chunks
                 </span>
               )}
               {item.status === "done" && (
                 <CheckCircle2 className="h-4 w-4 text-green-500" />
               )}
+              {item.status === "duplicate" && (
+                <span className="text-xs text-yellow-600 dark:text-yellow-400">
+                  Duplicado
+                </span>
+              )}
+              {item.status === "duplicate" && (
+                <AlertTriangle className="h-4 w-4 text-yellow-500" />
+              )}
               {item.status === "error" && (
-                <span className="text-xs text-red-500" title={item.error}>
+                <span className="text-xs text-red-500 dark:text-red-400" title={item.error}>
                   Error
                 </span>
               )}
@@ -254,6 +277,22 @@ export default function UploadPage() {
               </p>
             ))}
         </StatusCard>
+      )}
+
+      {duplicateCount > 0 && (
+        <div className="mt-6 rounded-lg border border-yellow-200 bg-yellow-50 p-4 dark:border-yellow-700 dark:bg-yellow-900/20">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-yellow-500 dark:text-yellow-400" />
+            <div>
+              <p className="font-medium text-yellow-800 dark:text-yellow-200">
+                {duplicateCount} duplicado{duplicateCount !== 1 ? "s" : ""} detectado{duplicateCount !== 1 ? "s" : ""}
+              </p>
+              <p className="mt-1 text-sm text-yellow-700 dark:text-yellow-300">
+                Estos archivos ya existen en la base de datos pero fueron indexados de todas formas.
+              </p>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -69,15 +69,15 @@ export default function DocumentsPage() {
     <div className="mx-auto max-w-3xl px-4 py-12">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Documentos</h1>
-          <p className="mt-1 text-sm text-gray-500">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Documentos</h1>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             {filtered.length} de {documents.length} PDF{documents.length !== 1 ? "s" : ""}
           </p>
         </div>
         <button
           onClick={fetchDocuments}
           disabled={loading}
-          className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50"
+          className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
         >
           Actualizar
         </button>
@@ -85,13 +85,13 @@ export default function DocumentsPage() {
 
       {!loading && !error && documents.length > 0 && (
         <div className="relative mt-6">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Buscar por nombre..."
-            className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-4 text-sm outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-4 text-sm outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:focus:border-blue-400"
           />
         </div>
       )}
@@ -101,15 +101,15 @@ export default function DocumentsPage() {
       )}
 
       {error && (
-        <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4">
+        <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
           <div className="flex items-start gap-3">
-            <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-500" />
+            <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-500 dark:text-red-400" />
             <div>
-              <p className="font-medium text-red-800">Error</p>
-              <p className="mt-1 text-sm text-red-700">{error}</p>
+              <p className="font-medium text-red-800 dark:text-red-200">Error</p>
+              <p className="mt-1 text-sm text-red-700 dark:text-red-300">{error}</p>
               <button
                 onClick={fetchDocuments}
-                className="mt-2 text-sm font-medium text-red-600 underline hover:text-red-800"
+                className="mt-2 text-sm font-medium text-red-600 underline hover:text-red-800 dark:text-red-400 dark:hover:text-red-200"
               >
                 Reintentar
               </button>

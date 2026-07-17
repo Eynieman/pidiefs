@@ -21,8 +21,8 @@ export function NavLinks() {
           href={link.href}
           className={`transition-colors ${
             pathname === link.href
-              ? "font-medium text-blue-600"
-              : "text-gray-600 hover:text-blue-600"
+              ? "font-medium text-blue-600 dark:text-blue-400"
+              : "text-gray-600 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400"
           }`}
         >
           {link.label}

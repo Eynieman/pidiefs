@@ -9,16 +9,16 @@ interface StatusCardProps {
 
 const styles = {
   success: {
-    container: "border-green-200 bg-green-50",
-    icon: "text-green-500",
-    title: "text-green-800",
-    content: "text-green-700",
+    container: "border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-900/20",
+    icon: "text-green-500 dark:text-green-400",
+    title: "text-green-800 dark:text-green-200",
+    content: "text-green-700 dark:text-green-300",
   },
   error: {
-    container: "border-red-200 bg-red-50",
-    icon: "text-red-500",
-    title: "text-red-800",
-    content: "text-red-700",
+    container: "border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20",
+    icon: "text-red-500 dark:text-red-400",
+    title: "text-red-800 dark:text-red-200",
+    content: "text-red-700 dark:text-red-300",
   },
 };
 

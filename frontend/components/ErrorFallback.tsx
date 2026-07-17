@@ -10,12 +10,12 @@ interface ErrorFallbackProps {
 export function ErrorFallback({ error, reset }: ErrorFallbackProps) {
   return (
     <div className="flex min-h-[50vh] flex-col items-center justify-center px-4 text-center">
-      <div className="rounded-xl border border-red-200 bg-red-50 p-8 max-w-md">
-        <AlertCircle className="mx-auto h-10 w-10 text-red-400" />
-        <h2 className="mt-4 text-lg font-semibold text-red-800">
+      <div className="max-w-md rounded-xl border border-red-200 bg-red-50 p-8 dark:border-red-800 dark:bg-red-900/20">
+        <AlertCircle className="mx-auto h-10 w-10 text-red-400 dark:text-red-500" />
+        <h2 className="mt-4 text-lg font-semibold text-red-800 dark:text-red-200">
           Algo salio mal
         </h2>
-        <p className="mt-2 text-sm text-red-600">
+        <p className="mt-2 text-sm text-red-600 dark:text-red-300">
           {error.message || "Ocurrio un error inesperado"}
         </p>
         <button

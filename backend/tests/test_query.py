@@ -7,7 +7,8 @@ async def test_health_check(client):
     assert "documents_indexed" in data
 
 
-async def test_query_no_documents(client):
+async def test_query_no_documents(client, monkeypatch):
+    monkeypatch.setattr("backend.routers.query.get_document_count", lambda: 0)
     res = await client.post(
         "/api/query",
         json={"question": "test question"},
