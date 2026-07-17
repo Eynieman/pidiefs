@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from backend.config import DATA_DIR
 
@@ -10,6 +11,17 @@ def get_db() -> sqlite3.Connection:
     return conn
 
 
+def sanitize_fts5_query(query: str) -> str:
+    # Eliminar operadores especiales de FTS5 que pueden alterar la búsqueda
+    # Mantener solo texto plano para búsqueda segura
+    sanitized = re.sub(r'["*+\-^:(){}[\]<>]', ' ', query)
+    sanitized = re.sub(r'\b(AND|OR|NOT|NEAR)\b', ' ', sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+    if not sanitized:
+        sanitized = '""'
+    return sanitized
+
+
 def init_db():
     with get_db() as conn:
         conn.execute("""
@@ -19,7 +31,8 @@ def init_db():
                 content_hash TEXT NOT NULL,
                 pages INTEGER NOT NULL,
                 chunks INTEGER NOT NULL,
-                uploaded_at TEXT NOT NULL
+                uploaded_at TEXT NOT NULL,
+                summary TEXT DEFAULT ''
             )
         """)
         conn.execute("""
@@ -43,6 +56,26 @@ def init_db():
                 page INTEGER NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                doc_ids TEXT NOT NULL,
+                title TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                sources TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+            )
+        """)
         conn.commit()
 
 
@@ -55,9 +88,9 @@ def load_metadata() -> dict:
 def save_document(doc: dict):
     with get_db() as conn:
         conn.execute(
-            """INSERT OR REPLACE INTO documents (id, filename, content_hash, pages, chunks, uploaded_at)
-            VALUES (?, ?, ?, ?, ?, ?)""",
-            (doc["id"], doc["filename"], doc["content_hash"], doc["pages"], doc["chunks"], doc["uploaded_at"]),
+            """INSERT OR REPLACE INTO documents (id, filename, content_hash, pages, chunks, uploaded_at, summary)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (doc["id"], doc["filename"], doc["content_hash"], doc["pages"], doc["chunks"], doc["uploaded_at"], doc.get("summary", "")),
         )
         conn.commit()
 
@@ -80,6 +113,7 @@ def delete_chunks(doc_id: str):
 
 
 def bm25_search(query: str, top_k: int = 10, doc_ids: list[str] | None = None) -> list[dict]:
+    safe_query = sanitize_fts5_query(query)
     with get_db() as conn:
         if doc_ids:
             placeholders = ",".join("?" for _ in doc_ids)
@@ -89,7 +123,7 @@ def bm25_search(query: str, top_k: int = 10, doc_ids: list[str] | None = None) -
                     JOIN chunks c ON f.rowid = c.rowid
                     WHERE chunks_fts MATCH ? AND c.doc_id IN ({placeholders})
                     ORDER BY rank LIMIT ?""",
-                [query] + doc_ids + [top_k],
+                [safe_query] + doc_ids + [top_k],
             ).fetchall()
         else:
             rows = conn.execute(
@@ -98,7 +132,7 @@ def bm25_search(query: str, top_k: int = 10, doc_ids: list[str] | None = None) -
                     JOIN chunks c ON f.rowid = c.rowid
                     WHERE chunks_fts MATCH ?
                     ORDER BY rank LIMIT ?""",
-                (query, top_k),
+                (safe_query, top_k),
             ).fetchall()
 
         return [
@@ -131,6 +165,85 @@ def get_chunks_by_doc(doc_id: str) -> list[dict]:
             (doc_id,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def create_conversation(conversation_id: str, doc_ids: list[str], title: str | None = None) -> dict:
+    import json
+    import time
+    now = str(time.time())
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO conversations (id, doc_ids, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)""",
+            (conversation_id, json.dumps(doc_ids), title, now, now),
+        )
+        conn.commit()
+        return {"id": conversation_id, "doc_ids": doc_ids, "title": title, "created_at": now, "updated_at": now}
+
+
+def get_conversations() -> list[dict]:
+    import json
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM conversations ORDER BY updated_at DESC").fetchall()
+        result = []
+        for row in rows:
+            conv = dict(row)
+            conv["doc_ids"] = json.loads(conv["doc_ids"])
+            result.append(conv)
+        return result
+
+
+def get_conversation(conversation_id: str) -> dict | None:
+    import json
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+        if row:
+            conv = dict(row)
+            conv["doc_ids"] = json.loads(conv["doc_ids"])
+            return conv
+        return None
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    with get_db() as conn:
+        conn.execute("DELETE FROM chat_messages WHERE conversation_id = ?", (conversation_id,))
+        cursor = conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def add_chat_message(conversation_id: str, role: str, content: str, sources: list[dict] | None = None) -> dict:
+    import json
+    import time
+    now = str(time.time())
+    sources_json = json.dumps(sources) if sources else None
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO chat_messages (conversation_id, role, content, sources, created_at)
+            VALUES (?, ?, ?, ?, ?)""",
+            (conversation_id, role, content, sources_json, now),
+        )
+        conn.execute(
+            "UPDATE conversations SET updated_at = ? WHERE id = ?",
+            (now, conversation_id),
+        )
+        conn.commit()
+        return {"id": cursor.lastrowid, "conversation_id": conversation_id, "role": role, "content": content, "sources": sources, "created_at": now}
+
+
+def get_chat_messages(conversation_id: str) -> list[dict]:
+    import json
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM chat_messages WHERE conversation_id = ? ORDER BY created_at",
+            (conversation_id,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            msg = dict(row)
+            msg["sources"] = json.loads(msg["sources"]) if msg["sources"] else None
+            result.append(msg)
+        return result
 
 
 init_db()

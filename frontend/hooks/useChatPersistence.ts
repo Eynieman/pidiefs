@@ -22,6 +22,15 @@ export interface Message {
   isError?: boolean;
 }
 
+export interface Conversation {
+  id: string;
+  doc_ids: string[];
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+  messages?: Message[];
+}
+
 function getDocKey(docId: string): string {
   return `${STORAGE_PREFIX}${docId}`;
 }
@@ -81,6 +90,8 @@ export function useChatPersistence() {
   const [messages, setMessages] = useState<Message[]>(() =>
     loadMessagesForDoc(getActiveDocId(loadSelectedDocIds())),
   );
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const isInitialMount = useRef(true);
   const prevDocIdsRef = useRef(selectedDocIds);
 
@@ -109,13 +120,100 @@ export function useChatPersistence() {
       const next = typeof docIds === "function" ? docIds(prev) : docIds;
       return next;
     });
+    setActiveConversationId(null);
   }, []);
 
   const clearChat = useCallback(() => {
     setMessages([]);
+    setActiveConversationId(null);
     const activeDoc = getActiveDocId(prevDocIdsRef.current);
     localStorage.removeItem(getDocKey(activeDoc));
   }, []);
 
-  return { messages, setMessages, selectedDocIds, setSelectedDocIds, clearChat };
+  const saveConversation = useCallback(async (title?: string): Promise<Conversation | null> => {
+    try {
+      const response = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          doc_ids: selectedDocIds,
+          title: title || messages[0]?.content?.slice(0, 50) || "Sin título",
+        }),
+      });
+      if (!response.ok) return null;
+      const conv = await response.json();
+
+      for (const msg of messages) {
+        await fetch(`/api/conversations/${conv.id}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            role: msg.role,
+            content: msg.content,
+            sources: msg.sources || null,
+          }),
+        });
+      }
+
+      setActiveConversationId(conv.id);
+      return conv;
+    } catch {
+      return null;
+    }
+  }, [selectedDocIds, messages]);
+
+  const loadConversations = useCallback(async (): Promise<Conversation[]> => {
+    try {
+      const response = await fetch("/api/conversations");
+      if (!response.ok) return [];
+      const convs = await response.json();
+      setConversations(convs);
+      return convs;
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const loadConversation = useCallback(async (conversationId: string): Promise<boolean> => {
+    try {
+      const response = await fetch(`/api/conversations/${conversationId}`);
+      if (!response.ok) return false;
+      const conv = await response.json();
+      setSelectedDocIdsState(conv.doc_ids);
+      setMessages(conv.messages || []);
+      setActiveConversationId(conversationId);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const deleteConversation = useCallback(async (conversationId: string): Promise<boolean> => {
+    try {
+      const response = await fetch(`/api/conversations/${conversationId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) return false;
+      if (activeConversationId === conversationId) {
+        setActiveConversationId(null);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }, [activeConversationId]);
+
+  return {
+    messages,
+    setMessages,
+    selectedDocIds,
+    setSelectedDocIds,
+    clearChat,
+    conversations,
+    activeConversationId,
+    saveConversation,
+    loadConversations,
+    loadConversation,
+    deleteConversation,
+  };
 }

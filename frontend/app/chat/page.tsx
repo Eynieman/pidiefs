@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2, Trash2, Lightbulb, Square, AlertCircle, Copy, Check, Download } from "lucide-react";
+import { Send, Loader2, Trash2, Lightbulb, Square, AlertCircle, Copy, Check, Save, FolderOpen } from "lucide-react";
 import { SourceCitation } from "@/components/SourceCitation";
 import { MarkdownMessage } from "@/components/MarkdownMessage";
-import { useChatPersistence } from "@/hooks/useChatPersistence";
+import { ChatExportMenu } from "@/components/ChatExportMenu";
+import { useChatPersistence, Conversation } from "@/hooks/useChatPersistence";
 
 interface Document {
   id: string;
@@ -27,6 +28,12 @@ export default function ChatPage() {
     selectedDocIds,
     setSelectedDocIds,
     clearChat,
+    conversations,
+    activeConversationId,
+    saveConversation,
+    loadConversations,
+    loadConversation,
+    deleteConversation,
   } = useChatPersistence();
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -35,6 +42,8 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [showConversations, setShowConversations] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const toggleDoc = (id: string) => {
     setSelectedDocIds((prev) => {
@@ -175,29 +184,30 @@ export default function ChatPage() {
     setTimeout(() => setCopiedIdx(null), 2000);
   };
 
-  const handleExport = () => {
-    const lines: string[] = ["# Conversación Pidiefs\n"];
-    for (const msg of messages) {
-      if (msg.role === "user") {
-        lines.push(`## Pregunta\n${msg.content}\n`);
-      } else {
-        lines.push(`## Respuesta\n${msg.content}\n`);
-        if (msg.sources && msg.sources.length > 0) {
-          lines.push("**Fuentes:**");
-          for (const src of msg.sources) {
-            lines.push(`- ${src.source} (pág. ${src.page}) — score: ${src.score}`);
-          }
-          lines.push("");
-        }
-      }
+  const handleSave = async () => {
+    if (messages.length === 0) return;
+    setSaving(true);
+    await saveConversation();
+    setSaving(false);
+  };
+
+  const handleLoadConversations = async () => {
+    if (showConversations) {
+      setShowConversations(false);
+    } else {
+      await loadConversations();
+      setShowConversations(true);
     }
-    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `chat-pidiefs-${new Date().toISOString().slice(0, 10)}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
+  };
+
+  const handleLoadConversation = async (conv: Conversation) => {
+    await loadConversation(conv.id);
+    setShowConversations(false);
+  };
+
+  const handleDeleteConversation = async (e: React.MouseEvent, convId: string) => {
+    e.stopPropagation();
+    await deleteConversation(convId);
   };
 
   return (
@@ -210,12 +220,21 @@ export default function ChatPage() {
           {messages.length > 0 && (
             <div className="flex gap-1">
               <button
-                onClick={handleExport}
-                className="rounded-lg p-2 text-gray-400 transition hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
-                title="Exportar conversación"
+                onClick={handleSave}
+                disabled={saving || messages.length === 0}
+                className="rounded-lg p-2 text-gray-400 transition hover:bg-green-50 hover:text-green-600 dark:hover:bg-green-900/20 dark:hover:text-green-400 disabled:opacity-50"
+                title="Guardar conversación"
               >
-                <Download className="h-4 w-4" />
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               </button>
+              <button
+                onClick={handleLoadConversations}
+                className="rounded-lg p-2 text-gray-400 transition hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
+                title="Cargar conversación"
+              >
+                <FolderOpen className="h-4 w-4" />
+              </button>
+              <ChatExportMenu messages={messages} />
               <button
                 onClick={clearChat}
                 className="rounded-lg p-2 text-gray-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
@@ -256,6 +275,43 @@ export default function ChatPage() {
           </div>
         )}
       </div>
+
+      {showConversations && (
+        <div className="border-b border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-900">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Conversaciones guardadas</span>
+            <button onClick={() => setShowConversations(false)} className="text-xs text-gray-400 hover:text-gray-600">Cerrar</button>
+          </div>
+          {conversations.length === 0 ? (
+            <p className="text-xs text-gray-400">No hay conversaciones guardadas</p>
+          ) : (
+            <div className="space-y-1 max-h-40 overflow-y-auto">
+              {conversations.map((conv) => (
+                <div
+                  key={conv.id}
+                  onClick={() => handleLoadConversation(conv)}
+                  className={`flex items-center justify-between rounded-lg px-3 py-2 text-xs cursor-pointer transition ${
+                    activeConversationId === conv.id
+                      ? "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300"
+                      : "hover:bg-gray-50 dark:hover:bg-gray-800"
+                  }`}
+                >
+                  <div className="truncate flex-1">
+                    <span className="font-medium">{conv.title || "Sin título"}</span>
+                    <span className="ml-2 text-gray-400">{conv.doc_ids.length} doc(s)</span>
+                  </div>
+                  <button
+                    onClick={(e) => handleDeleteConversation(e, conv.id)}
+                    className="ml-2 p-1 text-gray-400 hover:text-red-500"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto py-6">
         {messages.length === 0 && (

@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { AlertCircle, FolderOpen, Search, ChevronLeft, ChevronRight, ArrowUpDown, X } from "lucide-react";
+import { AlertCircle, FolderOpen, Search, ChevronLeft, ChevronRight, ArrowUpDown, X, CheckSquare, Square } from "lucide-react";
 import { DocumentCard } from "@/components/DocumentCard";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { EmptyState } from "@/components/EmptyState";
+import { BatchActionBar } from "@/components/BatchActionBar";
 
 interface Document {
   id: string;
@@ -34,6 +35,9 @@ export default function DocumentsPage() {
   const [page, setPage] = useState(1);
   const [chunksDoc, setChunksDoc] = useState<{ doc: Document; chunks: Chunk[] } | null>(null);
   const [loadingChunks, setLoadingChunks] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [batchDeleting, setBatchDeleting] = useState(false);
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -90,6 +94,57 @@ export default function DocumentsPage() {
     }
   };
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectionMode = () => {
+    setSelectionMode((prev) => !prev);
+    setSelectedIds(new Set());
+  };
+
+  const selectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((d) => d.id)));
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    const count = selectedIds.size;
+    const confirmed = window.confirm(
+      `¿Eliminar ${count} archivo(s)?\n\nSe borrarán todos los chunks y archivos PDF asociados.`
+    );
+    if (!confirmed) return;
+
+    try {
+      setBatchDeleting(true);
+      const res = await fetch("/api/documents/batch", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc_ids: Array.from(selectedIds) }),
+      });
+      if (!res.ok) throw new Error("Error al eliminar documentos");
+      setDocuments((prev) => prev.filter((d) => !selectedIds.has(d.id)));
+      setSelectedIds(new Set());
+      setSelectionMode(false);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error al eliminar documentos";
+      alert(message);
+    } finally {
+      setBatchDeleting(false);
+    }
+  };
+
   const filtered = documents.filter((d) =>
     d.filename.toLowerCase().includes(searchTerm.toLowerCase()),
   );
@@ -128,13 +183,35 @@ export default function DocumentsPage() {
             {filtered.length} de {documents.length} PDF{documents.length !== 1 ? "s" : ""}
           </p>
         </div>
-        <button
-          onClick={fetchDocuments}
-          disabled={loading}
-          className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
-        >
-          Actualizar
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={toggleSelectionMode}
+            className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${
+              selectionMode
+                ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
+                : "border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+            }`}
+          >
+            {selectionMode ? (
+              <span className="flex items-center gap-1">
+                <CheckSquare className="h-4 w-4" />
+                Seleccionar
+              </span>
+            ) : (
+              <span className="flex items-center gap-1">
+                <Square className="h-4 w-4" />
+                Seleccionar
+              </span>
+            )}
+          </button>
+          <button
+            onClick={fetchDocuments}
+            disabled={loading}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+          >
+            Actualizar
+          </button>
+        </div>
       </div>
 
       {!loading && !error && documents.length > 0 && (
@@ -209,6 +286,19 @@ export default function DocumentsPage() {
 
       {!loading && paged.length > 0 && (
         <div className="mt-6 space-y-3">
+          {selectionMode && (
+            <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 dark:border-gray-700 dark:bg-gray-800">
+              <button
+                onClick={selectAll}
+                className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+              >
+                {selectedIds.size === filtered.length ? "Deseleccionar todo" : "Seleccionar todo"}
+              </button>
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {selectedIds.size} seleccionado(s)
+              </span>
+            </div>
+          )}
           {paged.map((doc) => (
             <DocumentCard
               key={doc.id}
@@ -216,6 +306,9 @@ export default function DocumentsPage() {
               onDelete={handleDelete}
               onViewChunks={handleViewChunks}
               isDeleting={deletingId === doc.id}
+              selected={selectedIds.has(doc.id)}
+              onSelect={toggleSelect}
+              selectionMode={selectionMode}
             />
           ))}
         </div>
@@ -291,6 +384,13 @@ export default function DocumentsPage() {
           </div>
         </div>
       )}
+
+      <BatchActionBar
+        selectedCount={selectedIds.size}
+        onDelete={handleBatchDelete}
+        onClear={() => setSelectedIds(new Set())}
+        loading={batchDeleting}
+      />
     </div>
   );
 }

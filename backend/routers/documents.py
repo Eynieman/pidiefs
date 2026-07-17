@@ -1,8 +1,9 @@
 import re
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Request
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from backend.config import PDF_DIR, MAX_FILE_SIZE
 from backend.models.document import DocumentResponse, StatsResponse
@@ -10,7 +11,10 @@ from backend.services.pdf_extractor import extract_text
 from backend.services.text_splitter import split_pages
 from backend.services.vector_store import add_documents, delete_document, get_document_count
 from backend.services.duplicate_detector import compute_content_hash
-from backend.database import load_metadata, save_document, delete_document_metadata, get_document_by_hash, save_chunks, delete_chunks, get_chunks_by_doc
+from backend.database import load_metadata, save_document, delete_document_metadata, get_document_by_hash, save_chunks, delete_chunks, get_chunks_by_doc, get_db
+from backend.services.notifications import notify_pdf_upload
+from backend.services.summarizer import generate_pdf_summary
+from backend.rate_limit import limiter
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -22,8 +26,17 @@ def _sanitize_filename(filename: str) -> str:
     return safe[:MAX_FILENAME_LENGTH]
 
 
+def _generate_and_save_summary(doc_id: str, filename: str, content: str):
+    summary = generate_pdf_summary(filename, content)
+    if summary:
+        with get_db() as conn:
+            conn.execute("UPDATE documents SET summary = ? WHERE id = ?", (summary, doc_id))
+            conn.commit()
+
+
 @router.post("", response_model=DocumentResponse)
-async def upload_document(file: UploadFile = File(...)):
+@limiter.limit("10/minute")
+async def upload_document(request: Request, file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos PDF")
 
@@ -96,12 +109,29 @@ async def upload_document(file: UploadFile = File(...)):
         }
         save_document(doc)
 
+        if background_tasks:
+            background_tasks.add_task(
+                notify_pdf_upload,
+                filename=file.filename,
+                pages=extracted["total_pages"],
+                chunks=num_chunks,
+                doc_id=doc_id,
+            )
+            page_texts = " ".join(p["content"] for p in extracted["pages"])
+            background_tasks.add_task(
+                _generate_and_save_summary,
+                doc_id=doc_id,
+                filename=file.filename,
+                content=page_texts,
+            )
+
         return DocumentResponse(
             id=doc_id,
             filename=file.filename,
             pages=extracted["total_pages"],
             chunks=num_chunks,
             uploaded_at=uploaded_at,
+            summary=None,
         )
 
     except HTTPException:
@@ -112,13 +142,15 @@ async def upload_document(file: UploadFile = File(...)):
 
 
 @router.get("", response_model=list[DocumentResponse])
-async def list_documents():
+@limiter.limit("60/minute")
+async def list_documents(request: Request):
     metadata = load_metadata()
     return [DocumentResponse(**doc) for doc in metadata.values()]
 
 
 @router.get("/stats", response_model=StatsResponse)
-async def get_stats():
+@limiter.limit("60/minute")
+async def get_stats(request: Request):
     metadata = load_metadata()
     if not metadata:
         return StatsResponse(
@@ -147,8 +179,38 @@ async def get_stats():
     )
 
 
+class BatchDeleteRequest(BaseModel):
+    doc_ids: list[str]
+
+
+@router.delete("/batch")
+@limiter.limit("5/minute")
+async def batch_delete_documents(request: Request, body: BatchDeleteRequest):
+    metadata = load_metadata()
+    deleted_count = 0
+    total_chunks_deleted = 0
+
+    for doc_id in body.doc_ids:
+        if doc_id not in metadata:
+            continue
+
+        deleted = delete_document(doc_id)
+        total_chunks_deleted += deleted
+
+        pdf_files = list(PDF_DIR.glob(f"{doc_id}_*"))
+        for f in pdf_files:
+            f.unlink(missing_ok=True)
+
+        delete_chunks(doc_id)
+        delete_document_metadata(doc_id)
+        deleted_count += 1
+
+    return {"deleted_documents": deleted_count, "deleted_chunks": total_chunks_deleted}
+
+
 @router.delete("/{doc_id}")
-async def remove_document(doc_id: str):
+@limiter.limit("20/minute")
+async def remove_document(request: Request, doc_id: str):
     metadata = load_metadata()
     if doc_id not in metadata:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
@@ -166,7 +228,8 @@ async def remove_document(doc_id: str):
 
 
 @router.get("/{doc_id}/chunks")
-async def get_document_chunks(doc_id: str):
+@limiter.limit("60/minute")
+async def get_document_chunks(request: Request, doc_id: str):
     metadata = load_metadata()
     if doc_id not in metadata:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
@@ -188,7 +251,8 @@ async def get_document_chunks(doc_id: str):
 
 
 @router.get("/{doc_id}/thumbnail")
-async def get_document_thumbnail(doc_id: str):
+@limiter.limit("60/minute")
+async def get_document_thumbnail(request: Request, doc_id: str):
     metadata = load_metadata()
     if doc_id not in metadata:
         raise HTTPException(status_code=404, detail="Documento no encontrado")

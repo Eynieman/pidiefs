@@ -19,3 +19,5 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 TOP_K_RESULTS = int(os.getenv("TOP_K_RESULTS", "5"))
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+OCR_ENABLED = os.getenv("OCR_ENABLED", "true").lower() == "true"
+OCR_LANGUAGE = os.getenv("OCR_LANGUAGE", "eng")

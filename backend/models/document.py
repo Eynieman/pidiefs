@@ -9,6 +9,7 @@ class DocumentResponse(BaseModel):
     chunks: int
     uploaded_at: str
     duplicate_of: str | None = None
+    summary: str | None = None
 
 
 class QueryRequest(BaseModel):

@@ -14,6 +14,9 @@ interface DocumentCardProps {
   onDelete: (doc: Document) => void;
   onViewChunks: (doc: Document) => void;
   isDeleting: boolean;
+  selected?: boolean;
+  onSelect?: (id: string) => void;
+  selectionMode?: boolean;
 }
 
 function formatDate(ts: string) {
@@ -27,12 +30,22 @@ function formatDate(ts: string) {
   });
 }
 
-export function DocumentCard({ document: doc, onDelete, onViewChunks, isDeleting }: DocumentCardProps) {
+export function DocumentCard({ document: doc, onDelete, onViewChunks, isDeleting, selected, onSelect, selectionMode }: DocumentCardProps) {
   const [imgError, setImgError] = useState(false);
 
   return (
-    <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-white p-4 shadow-sm transition hover:shadow-md dark:border-gray-700 dark:bg-gray-800 dark:hover:shadow-lg dark:hover:shadow-gray-900/20">
+    <div className={`flex items-center justify-between rounded-xl border bg-white p-4 shadow-sm transition hover:shadow-md dark:bg-gray-800 dark:hover:shadow-lg dark:hover:shadow-gray-900/20 ${
+      selected ? "border-blue-500 dark:border-blue-400" : "border-gray-200 dark:border-gray-700"
+    }`}>
       <div className="flex items-start gap-3">
+        {selectionMode && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onSelect?.(doc.id)}
+            className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+        )}
         {!imgError ? (
           <img
             src={`/api/documents/${doc.id}/thumbnail`}

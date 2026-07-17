@@ -1,7 +1,7 @@
 import json
 
 import groq
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from backend.models.document import QueryRequest, QueryResponse
@@ -9,6 +9,7 @@ from backend.services.embeddings import embed_query
 from backend.services.vector_store import query_similar, get_document_count
 from backend.services.llm import generate_answer, generate_answer_stream
 from backend.config import TOP_K_RESULTS, GROQ_API_KEY
+from backend.rate_limit import limiter
 
 router = APIRouter(prefix="/api", tags=["query"])
 
@@ -28,7 +29,8 @@ def _build_sources(similar_docs: list[dict]) -> list[dict]:
 
 
 @router.post("/query", response_model=QueryResponse)
-async def query_knowledge_base(query_request: QueryRequest):
+@limiter.limit("30/minute")
+async def query_knowledge_base(request: Request, query_request: QueryRequest):
     if len(query_request.question) > MAX_QUESTION_LENGTH:
         raise HTTPException(
             status_code=400,
@@ -80,7 +82,8 @@ async def query_knowledge_base(query_request: QueryRequest):
 
 
 @router.post("/query/stream")
-async def query_knowledge_base_stream(query_request: QueryRequest):
+@limiter.limit("30/minute")
+async def query_knowledge_base_stream(request: Request, query_request: QueryRequest):
     if len(query_request.question) > MAX_QUESTION_LENGTH:
         raise HTTPException(
             status_code=400,
@@ -136,7 +139,8 @@ async def query_knowledge_base_stream(query_request: QueryRequest):
 
 
 @router.get("/health")
-async def health_check():
+@limiter.limit("60/minute")
+async def health_check(request: Request):
     return {
         "status": "ok",
         "groq_configured": bool(GROQ_API_KEY),
