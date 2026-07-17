@@ -1,0 +1,34 @@
+name: WhatsApp Notification
+
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Send WhatsApp notification
+        env:
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          WHATSAPP_TO_NUMBER: ${{ secrets.WHATSAPP_TO_NUMBER }}
+          COMMIT_AUTHOR: ${{ github.actor }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.event.pull_request.title }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT_URL: ${{ github.event.head_commit.url || github.event.pull_request.html_url }}
+          CHANGED_FILES: ${{ github.event.head_commit.modified && join(github.event.head_commit.modified, ',') || '' }}
+          EVENT_TYPE: ${{ github.event_name }}
+        run: python scripts/whatsapp_notify.py
