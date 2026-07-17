@@ -12,6 +12,8 @@ from backend.config import TOP_K_RESULTS, GROQ_API_KEY
 
 router = APIRouter(prefix="/api", tags=["query"])
 
+MAX_QUESTION_LENGTH = 2000
+
 
 def _build_sources(similar_docs: list[dict]) -> list[dict]:
     return [
@@ -26,7 +28,13 @@ def _build_sources(similar_docs: list[dict]) -> list[dict]:
 
 
 @router.post("/query", response_model=QueryResponse)
-async def query_knowledge_base(request: QueryRequest):
+async def query_knowledge_base(query_request: QueryRequest):
+    if len(query_request.question) > MAX_QUESTION_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"La pregunta excede el límite de {MAX_QUESTION_LENGTH} caracteres",
+        )
+
     if not GROQ_API_KEY:
         raise HTTPException(
             status_code=500,
@@ -40,9 +48,15 @@ async def query_knowledge_base(request: QueryRequest):
             detail="No hay documentos indexados. Sube un PDF primero.",
         )
 
-    query_embedding = await embed_query(request.question)
-    top_k = min(request.top_k, TOP_K_RESULTS)
-    similar_docs = query_similar(query_embedding, top_k=top_k, doc_id=request.doc_id)
+    query_embedding = await embed_query(query_request.question)
+    top_k = min(query_request.top_k, TOP_K_RESULTS)
+    similar_docs = query_similar(
+        query_embedding,
+        top_k=top_k,
+        doc_id=query_request.doc_id,
+        doc_ids=query_request.doc_ids,
+        query_text=query_request.question,
+    )
 
     if not similar_docs:
         return QueryResponse(
@@ -51,7 +65,7 @@ async def query_knowledge_base(request: QueryRequest):
         )
 
     try:
-        answer = generate_answer(request.question, similar_docs)
+        answer = generate_answer(query_request.question, similar_docs)
     except HTTPException:
         raise
     except groq.RateLimitError:
@@ -66,7 +80,13 @@ async def query_knowledge_base(request: QueryRequest):
 
 
 @router.post("/query/stream")
-async def query_knowledge_base_stream(request: QueryRequest):
+async def query_knowledge_base_stream(query_request: QueryRequest):
+    if len(query_request.question) > MAX_QUESTION_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"La pregunta excede el límite de {MAX_QUESTION_LENGTH} caracteres",
+        )
+
     if not GROQ_API_KEY:
         raise HTTPException(
             status_code=500,
@@ -80,9 +100,15 @@ async def query_knowledge_base_stream(request: QueryRequest):
             detail="No hay documentos indexados. Sube un PDF primero.",
         )
 
-    query_embedding = await embed_query(request.question)
-    top_k = min(request.top_k, TOP_K_RESULTS)
-    similar_docs = query_similar(query_embedding, top_k=top_k, doc_id=request.doc_id)
+    query_embedding = await embed_query(query_request.question)
+    top_k = min(query_request.top_k, TOP_K_RESULTS)
+    similar_docs = query_similar(
+        query_embedding,
+        top_k=top_k,
+        doc_id=query_request.doc_id,
+        doc_ids=query_request.doc_ids,
+        query_text=query_request.question,
+    )
 
     if not similar_docs:
         async def empty():
@@ -96,7 +122,7 @@ async def query_knowledge_base_stream(request: QueryRequest):
     async def stream():
         yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
         try:
-            for token in generate_answer_stream(request.question, similar_docs):
+            for token in generate_answer_stream(query_request.question, similar_docs):
                 yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
         except groq.RateLimitError:
             yield f"data: {json.dumps({'type': 'error', 'content': 'Límite de solicitudes alcanzado'})}\n\n"

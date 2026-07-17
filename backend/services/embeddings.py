@@ -5,10 +5,16 @@ from backend.config import EMBEDDING_MODEL
 _model = None
 
 
-def get_model() -> SentenceTransformer:
+def preload_model():
     global _model
     if _model is None:
         _model = SentenceTransformer(EMBEDDING_MODEL)
+
+
+def get_model() -> SentenceTransformer:
+    global _model
+    if _model is None:
+        preload_model()
     return _model
 
 

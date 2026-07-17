@@ -15,6 +15,7 @@ class QueryRequest(BaseModel):
     question: str
     top_k: int = 5
     doc_id: str | None = None
+    doc_ids: list[str] | None = None
 
 
 class QueryResponse(BaseModel):

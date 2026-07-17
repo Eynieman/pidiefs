@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2, Trash2, Lightbulb, Square, AlertCircle, Copy, Check } from "lucide-react";
+import { Send, Loader2, Trash2, Lightbulb, Square, AlertCircle, Copy, Check, Download } from "lucide-react";
 import { SourceCitation } from "@/components/SourceCitation";
 import { MarkdownMessage } from "@/components/MarkdownMessage";
 import { useChatPersistence } from "@/hooks/useChatPersistence";
@@ -24,16 +24,34 @@ export default function ChatPage() {
   const {
     messages,
     setMessages,
-    selectedDocId,
-    setSelectedDocId,
+    selectedDocIds,
+    setSelectedDocIds,
     clearChat,
   } = useChatPersistence();
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [docsError, setDocsError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+
+  const toggleDoc = (id: string) => {
+    setSelectedDocIds((prev) => {
+      if (prev.includes(id)) {
+        return prev.filter((d) => d !== id);
+      }
+      return [...prev, id];
+    });
+  };
+
+  const toggleAll = () => {
+    if (selectedDocIds.length === documents.length) {
+      setSelectedDocIds([]);
+    } else {
+      setSelectedDocIds(documents.map((d) => d.id));
+    }
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -43,7 +61,7 @@ export default function ChatPage() {
     fetch("/api/documents")
       .then((res) => res.json())
       .then((data) => setDocuments(data))
-      .catch(() => {});
+      .catch(() => setDocsError("No se pudo conectar con el backend"));
   }, []);
 
   const handleSend = useCallback(async (overrideQuestion?: string) => {
@@ -54,9 +72,9 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, { role: "user", content: question }]);
     setLoading(true);
 
-    const body: { question: string; doc_id?: string } = { question };
-    if (selectedDocId !== "all") {
-      body.doc_id = selectedDocId;
+    const body: { question: string; doc_ids?: string[] } = { question };
+    if (selectedDocIds.length > 0) {
+      body.doc_ids = selectedDocIds;
     }
 
     const controller = new AbortController();
@@ -81,6 +99,7 @@ export default function ChatPage() {
       const decoder = new TextDecoder();
       let sources: { content: string; source: string; page: number; score: number }[] = [];
       let answer = "";
+      let buffer = "";
 
       setMessages((prev) => [...prev, { role: "assistant", content: "", sources: [] }]);
 
@@ -88,8 +107,9 @@ export default function ChatPage() {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const text = decoder.decode(value, { stream: true });
-        const lines = text.split("\n");
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
@@ -143,7 +163,7 @@ export default function ChatPage() {
       abortRef.current = null;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input, loading, selectedDocId]);
+  }, [input, loading, selectedDocIds]);
 
   const handleStop = () => {
     abortRef.current?.abort();
@@ -155,35 +175,85 @@ export default function ChatPage() {
     setTimeout(() => setCopiedIdx(null), 2000);
   };
 
-  const selectedDoc = documents.find((d) => d.id === selectedDocId);
+  const handleExport = () => {
+    const lines: string[] = ["# Conversación Pidiefs\n"];
+    for (const msg of messages) {
+      if (msg.role === "user") {
+        lines.push(`## Pregunta\n${msg.content}\n`);
+      } else {
+        lines.push(`## Respuesta\n${msg.content}\n`);
+        if (msg.sources && msg.sources.length > 0) {
+          lines.push("**Fuentes:**");
+          for (const src of msg.sources) {
+            lines.push(`- ${src.source} (pág. ${src.page}) — score: ${src.score}`);
+          }
+          lines.push("");
+        }
+      }
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chat-pidiefs-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="mx-auto flex h-[calc(100vh-3.5rem)] max-w-3xl flex-col px-4">
-      <div className="flex items-center gap-3 border-b border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-900">
-        <label htmlFor="doc-select" className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          Documento:
-        </label>
-        <select
-          id="doc-select"
-          value={selectedDocId}
-          onChange={(e) => setSelectedDocId(e.target.value)}
-          className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:focus:border-blue-400"
-        >
-          <option value="all">Todos los documentos</option>
-          {documents.map((doc) => (
-            <option key={doc.id} value={doc.id}>
-              {doc.filename} ({doc.pages}p, {doc.chunks}c)
-            </option>
-          ))}
-        </select>
-        {messages.length > 0 && (
-          <button
-            onClick={clearChat}
-            className="rounded-lg p-2 text-gray-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
-            title="Limpiar chat"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
+      <div className="border-b border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-900">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Documentos ({selectedDocIds.length}/{documents.length})
+          </span>
+          {messages.length > 0 && (
+            <div className="flex gap-1">
+              <button
+                onClick={handleExport}
+                className="rounded-lg p-2 text-gray-400 transition hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
+                title="Exportar conversación"
+              >
+                <Download className="h-4 w-4" />
+              </button>
+              <button
+                onClick={clearChat}
+                className="rounded-lg p-2 text-gray-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                title="Limpiar chat"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+        </div>
+        {docsError ? (
+          <span className="text-sm text-red-500">{docsError}</span>
+        ) : (
+          <div className="mt-2 flex flex-wrap gap-2">
+            <label className="flex cursor-pointer items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1 text-xs text-gray-600 transition hover:border-blue-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-500">
+              <input
+                type="checkbox"
+                checked={selectedDocIds.length === documents.length && documents.length > 0}
+                onChange={toggleAll}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              Todos
+            </label>
+            {documents.map((doc) => (
+              <label
+                key={doc.id}
+                className="flex cursor-pointer items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1 text-xs text-gray-600 transition hover:border-blue-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-500"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedDocIds.includes(doc.id)}
+                  onChange={() => toggleDoc(doc.id)}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                {doc.filename}
+              </label>
+            ))}
+          </div>
         )}
       </div>
 
@@ -194,9 +264,11 @@ export default function ChatPage() {
               Haz una pregunta sobre tus documentos
             </p>
             <p className="mt-1 text-sm text-gray-300 dark:text-gray-600">
-              {selectedDoc
-                ? `Buscando en: ${selectedDoc.filename}`
-                : "Buscando en todos los documentos"}
+              {selectedDocIds.length === 0
+                ? "Selecciona documentos para buscar"
+                : selectedDocIds.length === documents.length
+                  ? "Buscando en todos los documentos"
+                  : `Buscando en ${selectedDocIds.length} documento(s)`}
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-2">
               {suggestions.map((s) => (

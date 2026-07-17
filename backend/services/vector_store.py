@@ -2,6 +2,7 @@ import chromadb
 from langchain_core.documents import Document
 from backend.config import CHROMA_DIR
 from backend.services.embeddings import embed_texts
+from backend.database import bm25_search
 
 _client = None
 _collection = None
@@ -44,28 +45,63 @@ async def add_documents(documents: list[Document], doc_id: str) -> int:
     return len(ids)
 
 
-def query_similar(query_embedding: list[float], top_k: int = 5, doc_id: str | None = None) -> list[dict]:
+def _reciprocal_rank_fusion(results_list: list[list[dict]], k: int = 60) -> list[dict]:
+    fused_scores: dict[str, float] = {}
+    doc_map: dict[str, dict] = {}
+
+    for results in results_list:
+        for rank, doc in enumerate(results):
+            key = f"{doc['metadata'].get('doc_id', '')}:{doc['content'][:100]}"
+            fused_scores[key] = fused_scores.get(key, 0) + 1.0 / (k + rank + 1)
+            doc_map[key] = doc
+
+    sorted_keys = sorted(fused_scores.keys(), key=lambda k: fused_scores[k], reverse=True)
+    return [{**doc_map[key], "score": fused_scores[key]} for key in sorted_keys]
+
+
+def query_similar(
+    query_embedding: list[float],
+    top_k: int = 5,
+    doc_id: str | None = None,
+    doc_ids: list[str] | None = None,
+    query_text: str | None = None,
+) -> list[dict]:
     collection = get_collection()
 
-    where = {"doc_id": doc_id} if doc_id else None
+    if doc_ids:
+        where = {"doc_id": {"$in": doc_ids}}
+    elif doc_id:
+        where = {"doc_id": doc_id}
+    else:
+        where = None
+
     results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=top_k,
+        n_results=top_k * 2,
         where=where,
         include=["documents", "metadatas", "distances"],
     )
 
-    docs = []
+    vector_docs = []
     if results["documents"] and results["documents"][0]:
         for i, text in enumerate(results["documents"][0]):
-            docs.append(
+            vector_docs.append(
                 {
                     "content": text,
                     "metadata": results["metadatas"][0][i],
                     "score": 1 - results["distances"][0][i],
                 }
             )
-    return docs
+
+    if query_text:
+        bm25_docs = bm25_search(query_text, top_k=top_k * 2, doc_ids=doc_ids)
+        if vector_docs and bm25_docs:
+            fused = _reciprocal_rank_fusion([vector_docs, bm25_docs])
+            return fused[:top_k]
+        elif bm25_docs:
+            return bm25_docs[:top_k]
+
+    return vector_docs[:top_k]
 
 
 def delete_document(doc_id: str) -> int:

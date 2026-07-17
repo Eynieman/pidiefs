@@ -2,6 +2,7 @@ import re
 import uuid
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi.responses import Response
 
 from backend.config import PDF_DIR, MAX_FILE_SIZE
 from backend.models.document import DocumentResponse, StatsResponse
@@ -9,7 +10,7 @@ from backend.services.pdf_extractor import extract_text
 from backend.services.text_splitter import split_pages
 from backend.services.vector_store import add_documents, delete_document, get_document_count
 from backend.services.duplicate_detector import compute_content_hash
-from backend.database import load_metadata, save_document, delete_document_metadata, get_document_by_hash
+from backend.database import load_metadata, save_document, delete_document_metadata, get_document_by_hash, save_chunks, delete_chunks, get_chunks_by_doc
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -28,19 +29,34 @@ async def upload_document(file: UploadFile = File(...)):
 
     content = await file.read()
 
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="El archivo esta vacio")
+
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=413,
             detail=f"El archivo excede el limite de {MAX_FILE_SIZE // (1024 * 1024)} MB",
         )
 
-    if len(content) == 0:
-        raise HTTPException(status_code=400, detail="El archivo esta vacio")
+    if not content[:5] == b"%PDF-":
+        raise HTTPException(status_code=400, detail="El archivo no es un PDF válido")
 
     content_hash = compute_content_hash(content)
 
     existing = get_document_by_hash(content_hash)
-    duplicate_of = existing["id"] if existing else None
+    if existing:
+        doc_id = uuid.uuid4().hex[:12]
+        safe_name = _sanitize_filename(file.filename)
+        pdf_path = PDF_DIR / f"{doc_id}_{safe_name}"
+        pdf_path.write_bytes(content)
+        return DocumentResponse(
+            id=existing["id"],
+            filename=file.filename,
+            pages=existing["pages"],
+            chunks=existing["chunks"],
+            uploaded_at=existing["uploaded_at"],
+            duplicate_of=existing["id"],
+        )
 
     doc_id = uuid.uuid4().hex[:12]
     safe_name = _sanitize_filename(file.filename)
@@ -57,6 +73,17 @@ async def upload_document(file: UploadFile = File(...)):
 
         chunks = split_pages(extracted["pages"], file.filename)
         num_chunks = await add_documents(chunks, doc_id)
+
+        chunk_data = [
+            {
+                "chunk_id": f"{doc_id}_chunk_{i}",
+                "content": chunk.page_content,
+                "source": chunk.metadata.get("source", ""),
+                "page": chunk.metadata.get("page", 0),
+            }
+            for i, chunk in enumerate(chunks)
+        ]
+        save_chunks(doc_id, chunk_data)
 
         uploaded_at = str(Path(pdf_path).stat().st_mtime)
         doc = {
@@ -75,7 +102,6 @@ async def upload_document(file: UploadFile = File(...)):
             pages=extracted["total_pages"],
             chunks=num_chunks,
             uploaded_at=uploaded_at,
-            duplicate_of=duplicate_of,
         )
 
     except HTTPException:
@@ -133,6 +159,83 @@ async def remove_document(doc_id: str):
     for f in pdf_files:
         f.unlink(missing_ok=True)
 
+    delete_chunks(doc_id)
     delete_document_metadata(doc_id)
 
     return {"deleted_chunks": deleted}
+
+
+@router.get("/{doc_id}/chunks")
+async def get_document_chunks(doc_id: str):
+    metadata = load_metadata()
+    if doc_id not in metadata:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+
+    chunks = get_chunks_by_doc(doc_id)
+    return {
+        "doc_id": doc_id,
+        "filename": metadata[doc_id]["filename"],
+        "chunks": [
+            {
+                "chunk_id": c["chunk_id"],
+                "content": c["content"],
+                "source": c["source"],
+                "page": c["page"],
+            }
+            for c in chunks
+        ],
+    }
+
+
+@router.get("/{doc_id}/thumbnail")
+async def get_document_thumbnail(doc_id: str):
+    metadata = load_metadata()
+    if doc_id not in metadata:
+        raise HTTPException(status_code=404, detail="Documento no encontrado")
+
+    pdf_files = list(PDF_DIR.glob(f"{doc_id}_*"))
+    if not pdf_files:
+        raise HTTPException(status_code=404, detail="Archivo PDF no encontrado")
+
+    try:
+        from pypdf import PdfReader
+        from pypdf import PageObject
+        from io import BytesIO
+        from PIL import Image
+
+        reader = PdfReader(str(pdf_files[0]))
+        if len(reader.pages) == 0:
+            raise HTTPException(status_code=422, detail="PDF sin páginas")
+
+        page = reader.pages[0]
+        text = page.extract_text() or ""
+
+        img = Image.new("RGB", (200, 280), "white")
+        from PIL import ImageDraw, ImageFont
+        draw = ImageDraw.Draw(img)
+
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 12)
+            small_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 10)
+        except Exception:
+            font = ImageFont.load_default()
+            small_font = font
+
+        draw.rectangle([0, 0, 199, 30], fill="#3B82F6")
+        draw.text((10, 8), metadata[doc_id]["filename"][:25], fill="white", font=small_font)
+
+        lines = text[:500].split("\n")
+        y = 40
+        for line in lines[:12]:
+            draw.text((10, y), line[:30], fill="#374151", font=small_font)
+            y += 18
+
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+
+        return Response(content=buf.getvalue(), media_type="image/png")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Error generando thumbnail")

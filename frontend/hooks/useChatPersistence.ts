@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 
 const STORAGE_PREFIX = "pidiefs-chat-doc-";
+const SELECTED_DOCS_KEY = "pidiefs-chat-selected-docs";
 const PREV_STORAGE_KEY = "pidiefs-chat-messages";
 const PREV_DOC_KEY = "pidiefs-chat-docid";
 const MAX_MESSAGES = 50;
@@ -25,14 +26,20 @@ function getDocKey(docId: string): string {
   return `${STORAGE_PREFIX}${docId}`;
 }
 
-function loadDocId(): string {
-  if (typeof window === "undefined") return "all";
-  const stored = localStorage.getItem(PREV_DOC_KEY);
-  if (stored) {
-    localStorage.removeItem(PREV_DOC_KEY);
-    return stored;
-  }
-  return "all";
+function loadSelectedDocIds(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(SELECTED_DOCS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+function saveSelectedDocIds(docIds: string[]) {
+  localStorage.setItem(SELECTED_DOCS_KEY, JSON.stringify(docIds));
 }
 
 function loadMessagesForDoc(docId: string): Message[] {
@@ -52,20 +59,30 @@ function saveMessagesForDoc(docId: string, msgs: Message[]) {
 
 function migrateIfNeeded() {
   if (typeof window === "undefined") return;
+
   const legacy = localStorage.getItem(PREV_STORAGE_KEY);
   if (legacy) {
     localStorage.setItem(getDocKey("all"), legacy);
     localStorage.removeItem(PREV_STORAGE_KEY);
   }
+
+  const prevDocId = localStorage.getItem(PREV_DOC_KEY);
+  if (prevDocId) {
+    localStorage.removeItem(PREV_DOC_KEY);
+  }
+}
+
+function getActiveDocId(docIds: string[]): string {
+  return docIds.length === 1 ? docIds[0] : "all";
 }
 
 export function useChatPersistence() {
-  const [selectedDocId, setSelectedDocIdState] = useState<string>(loadDocId);
+  const [selectedDocIds, setSelectedDocIdsState] = useState<string[]>(loadSelectedDocIds);
   const [messages, setMessages] = useState<Message[]>(() =>
-    loadMessagesForDoc(selectedDocId),
+    loadMessagesForDoc(getActiveDocId(loadSelectedDocIds())),
   );
   const isInitialMount = useRef(true);
-  const prevDocIdRef = useRef(selectedDocId);
+  const prevDocIdsRef = useRef(selectedDocIds);
 
   useEffect(() => {
     migrateIfNeeded();
@@ -73,25 +90,32 @@ export function useChatPersistence() {
 
   useEffect(() => {
     isInitialMount.current = false;
-    saveMessagesForDoc(prevDocIdRef.current, messages);
+    const activeDoc = getActiveDocId(prevDocIdsRef.current);
+    saveMessagesForDoc(activeDoc, messages);
   }, [messages]);
 
   useEffect(() => {
-    if (prevDocIdRef.current === selectedDocId) return;
-    saveMessagesForDoc(prevDocIdRef.current, messages);
-    setMessages(loadMessagesForDoc(selectedDocId));
-    prevDocIdRef.current = selectedDocId;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDocId]);
+    if (JSON.stringify(prevDocIdsRef.current) === JSON.stringify(selectedDocIds)) return;
+    const prevActive = getActiveDocId(prevDocIdsRef.current);
+    saveMessagesForDoc(prevActive, messages);
+    const newActive = getActiveDocId(selectedDocIds);
+    setMessages(loadMessagesForDoc(newActive));
+    prevDocIdsRef.current = selectedDocIds;
+    saveSelectedDocIds(selectedDocIds);
+  }, [selectedDocIds]);
 
-  const setSelectedDocId = useCallback((docId: string) => {
-    setSelectedDocIdState(docId);
+  const setSelectedDocIds = useCallback((docIds: string[] | ((prev: string[]) => string[])) => {
+    setSelectedDocIdsState((prev) => {
+      const next = typeof docIds === "function" ? docIds(prev) : docIds;
+      return next;
+    });
   }, []);
 
   const clearChat = useCallback(() => {
     setMessages([]);
-    localStorage.removeItem(getDocKey(prevDocIdRef.current));
+    const activeDoc = getActiveDocId(prevDocIdsRef.current);
+    localStorage.removeItem(getDocKey(activeDoc));
   }, []);
 
-  return { messages, setMessages, selectedDocId, setSelectedDocId, clearChat };
+  return { messages, setMessages, selectedDocIds, setSelectedDocIds, clearChat };
 }

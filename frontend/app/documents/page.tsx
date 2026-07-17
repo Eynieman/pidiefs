@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { AlertCircle, FolderOpen, Search, ChevronLeft, ChevronRight, ArrowUpDown } from "lucide-react";
+import { AlertCircle, FolderOpen, Search, ChevronLeft, ChevronRight, ArrowUpDown, X } from "lucide-react";
 import { DocumentCard } from "@/components/DocumentCard";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { EmptyState } from "@/components/EmptyState";
@@ -12,6 +12,13 @@ interface Document {
   pages: number;
   chunks: number;
   uploaded_at: string;
+}
+
+interface Chunk {
+  chunk_id: string;
+  content: string;
+  source: string;
+  page: number;
 }
 
 type SortBy = "date" | "name" | "pages";
@@ -25,6 +32,8 @@ export default function DocumentsPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("date");
   const [page, setPage] = useState(1);
+  const [chunksDoc, setChunksDoc] = useState<{ doc: Document; chunks: Chunk[] } | null>(null);
+  const [loadingChunks, setLoadingChunks] = useState(false);
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -63,6 +72,21 @@ export default function DocumentsPage() {
       alert(message);
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleViewChunks = async (doc: Document) => {
+    try {
+      setLoadingChunks(true);
+      const res = await fetch(`/api/documents/${doc.id}/chunks`);
+      if (!res.ok) throw new Error("Error al cargar chunks");
+      const data = await res.json();
+      setChunksDoc({ doc, chunks: data.chunks });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error al cargar chunks";
+      alert(message);
+    } finally {
+      setLoadingChunks(false);
     }
   };
 
@@ -190,6 +214,7 @@ export default function DocumentsPage() {
               key={doc.id}
               document={doc}
               onDelete={handleDelete}
+              onViewChunks={handleViewChunks}
               isDeleting={deletingId === doc.id}
             />
           ))}
@@ -215,6 +240,55 @@ export default function DocumentsPage() {
           >
             <ChevronRight className="h-4 w-4" />
           </button>
+        </div>
+      )}
+
+      {chunksDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-xl bg-white shadow-xl dark:bg-gray-800">
+            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+              <div>
+                <h3 className="font-semibold text-gray-900 dark:text-gray-100">
+                  Chunks: {chunksDoc.doc.filename}
+                </h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {chunksDoc.chunks.length} chunks indexados
+                </p>
+              </div>
+              <button
+                onClick={() => setChunksDoc(null)}
+                className="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-4" style={{ maxHeight: "calc(80vh - 60px)" }}>
+              {loadingChunks ? (
+                <LoadingSpinner message="Cargando chunks..." />
+              ) : (
+                <div className="space-y-3">
+                  {chunksDoc.chunks.map((chunk) => (
+                    <div
+                      key={chunk.chunk_id}
+                      className="rounded-lg border border-gray-200 p-3 dark:border-gray-700"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
+                          Pagina {chunk.page}
+                        </span>
+                        <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                          {chunk.chunk_id}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap dark:text-gray-300">
+                        {chunk.content}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

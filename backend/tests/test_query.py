@@ -42,7 +42,7 @@ async def test_query_rate_limit(client, monkeypatch):
     )
     monkeypatch.setattr(
         "backend.routers.query.query_similar",
-        lambda emb, top_k, doc_id=None: [{"content": "test", "metadata": {"source": "a", "page": 1}, "score": 0.9}],
+        lambda emb, top_k, doc_id=None, doc_ids=None, query_text=None: [{"content": "test", "metadata": {"source": "a", "page": 1}, "score": 0.9}],
     )
 
     def mock_generate(question, docs):
@@ -69,7 +69,7 @@ async def test_query_auth_error(client, monkeypatch):
     )
     monkeypatch.setattr(
         "backend.routers.query.query_similar",
-        lambda emb, top_k, doc_id=None: [{"content": "test", "metadata": {"source": "a", "page": 1}, "score": 0.9}],
+        lambda emb, top_k, doc_id=None, doc_ids=None, query_text=None: [{"content": "test", "metadata": {"source": "a", "page": 1}, "score": 0.9}],
     )
 
     def mock_generate(question, docs):

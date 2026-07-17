@@ -26,12 +26,13 @@ function formatLastUpload(ts: string | null): string {
 export default function Home() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/documents/stats")
       .then((res) => res.json())
       .then((data) => setStats(data))
-      .catch(() => {})
+      .catch(() => setError("No se pudo conectar con el backend"))
       .finally(() => setLoading(false));
   }, []);
 
@@ -52,6 +53,16 @@ export default function Home() {
       {loading ? (
         <div className="mt-12 flex justify-center">
           <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+        </div>
+      ) : error ? (
+        <div className="mt-12 rounded-xl border border-red-200 bg-red-50 p-6 text-center dark:border-red-800 dark:bg-red-900/20">
+          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-3 text-sm font-medium text-red-600 underline hover:text-red-700 dark:text-red-400"
+          >
+            Reintentar
+          </button>
         </div>
       ) : stats && (
         <div className="mt-12 grid grid-cols-2 gap-4 sm:grid-cols-4">
