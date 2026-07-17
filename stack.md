@@ -11,20 +11,22 @@ Arquitectura de una aplicación web para consultar PDFs mediante un pipeline de 
 │                        FRONTEND (Next.js)                       │
 │  ┌───────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
 │  │ Upload UI │  │ Chat / Query │  │ Document List / Status   │  │
-│  │(drag&drop)│  │ (markdown)   │  │ (persistencia local)     │  │
+│  │(drag&drop)│  │ (markdown)   │  │ (thumbnails, chunks)     │  │
 │  └─────┬─────┘  └──────┬───────┘  └────────────┬─────────────┘  │
 └────────┼───────────────┼───────────────────────┼────────────────┘
          │               │                       │
          ▼               ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                     API REST (FastAPI)                           │
-│  POST /upload    POST /query    GET /documents    DELETE /doc    │
+│  POST /upload    POST /query/stream  GET /documents             │
+│  GET /stats      GET /chunks         GET /thumbnail             │
+│  DELETE /doc                                                      │
 └────┬───────────────┬───────────────────────────┬────────────────┘
      │               │                           │
      ▼               ▼                           ▼
 ┌─────────────┐ ┌──────────────┐ ┌──────────────────────────────┐
 │  PDF Text   │ │  RAG Chain   │ │  Document Metadata Store     │
-│  Extraction │ │  (LangChain) │ │  (JSON)                      │
+│  Extraction │ │  (LangChain) │ │  (SQLite + FTS5)             │
 └──────┬──────┘ └──────┬───────┘ └──────────────────────────────┘
        │               │
        ▼               ▼
@@ -57,7 +59,7 @@ Arquitectura de una aplicación web para consultar PDFs mediante un pipeline de 
 | **Vector Store**  | ChromaDB (embedded)               | Gratuito, local, persistente, sin servidor externo  |
 | **LLM**           | Groq API — Llama 3.3 70B         | Gratuito (14,400 req/día), ultra rápido (LPU)      |
 | **Orchestration** | LangChain                         | Pipeline RAG completo con retriever + chain          |
-| **DB Metadata**   | JSON file                         | Ligero, sin setup, almacena info de documentos      |
+| **DB Metadata**   | SQLite + FTS5                     | Local, robusto, full-text search para BM25          |
 | **Testing**       | Vitest + pytest                   | Tests unitarios frontend y backend                  |
 | **Dev Scripts**   | concurrently                      | Arranca backend + frontend con un solo comando      |
 
@@ -103,20 +105,23 @@ Arquitectura de una aplicación web para consultar PDFs mediante un pipeline de 
 
 ### 5.1 Ingesta de PDFs
 ```
-PDF Upload (max 50 MB) → Validación tamaño + extensión
+PDF Upload (max 50 MB) → Validación magic bytes %PDF + tamaño + extensión
+    → Detección de duplicados (MD5 hash)
     → Extracción texto (PyPDF/pdfplumber)
     → Chunking (LangChain, 500 chars, 50 overlap)
     → Embeddings (Sentence Transformers, local)
-    → Almacenar en ChromaDB
-    → Guardar metadata en JSON
+    → Almacenar en ChromaDB + SQLite FTS5
+    → Guardar metadata en SQLite
 ```
 
 ### 5.2 Consulta (Query)
 ```
 User Query → Embedding de la query (local)
-    → Buscar top-K chunks similares en ChromaDB
+    → Búsqueda híbrida: ChromaDB (vectorial) + SQLite FTS5 (BM25)
+    → Reciprocal Rank Fusion para combinar resultados
     → Construir prompt con contexto + pregunta
     → Enviar a Groq API (Llama 3.3 70B, cloud)
+    → Streaming de respuesta (SSE)
     → Respuesta con fuentes citadas (rendered como markdown)
 ```
 
@@ -128,29 +133,39 @@ User Query → Embedding de la query (local)
 pageyn/
 ├── frontend/                  # Next.js App
 │   ├── app/
-│   │   ├── layout.tsx         # Layout raíz con nav
-│   │   ├── page.tsx           # Dashboard principal
+│   │   ├── layout.tsx         # Layout raíz con nav + dark mode
+│   │   ├── page.tsx           # Dashboard principal (stats)
+│   │   ├── not-found.tsx      # Página 404
 │   │   ├── error.tsx          # Error boundary root
 │   │   ├── global-error.tsx   # Error boundary layout
 │   │   ├── upload/
-│   │   │   ├── page.tsx       # Subir PDFs (drag & drop)
+│   │   │   ├── page.tsx       # Subir PDFs (drag & drop, parallel)
+│   │   │   ├── loading.tsx    # Loading state
 │   │   │   └── error.tsx      # Error boundary upload
 │   │   ├── documents/
-│   │   │   ├── page.tsx       # Listar y eliminar PDFs
+│   │   │   ├── page.tsx       # Listar, eliminar, ver chunks, thumbnails
+│   │   │   ├── loading.tsx    # Loading state
 │   │   │   └── error.tsx      # Error boundary documents
 │   │   └── chat/
-│   │       ├── page.tsx       # Consultar knowledge base
+│   │       ├── page.tsx       # Multi-select docs, export, stop button
+│   │       ├── loading.tsx    # Loading state
 │   │       └── error.tsx      # Error boundary chat
 │   ├── components/
-│   │   ├── DocumentCard.tsx   # Card de documento
+│   │   ├── DocumentCard.tsx   # Card con thumbnail + chunks button
 │   │   ├── EmptyState.tsx     # Estado vacío genérico
 │   │   ├── ErrorFallback.tsx  # Fallback de error boundaries
 │   │   ├── LoadingSpinner.tsx # Spinner de carga
 │   │   ├── MarkdownMessage.tsx# Rendering markdown
+│   │   ├── NavLinks.tsx       # Navegación responsive (hamburger)
 │   │   ├── SourceCitation.tsx # Fuentes de respuestas
-│   │   └── StatusCard.tsx     # Cards de éxito/error
+│   │   ├── StatusCard.tsx     # Cards de éxito/error
+│   │   └── ThemeToggle.tsx    # Toggle dark/light mode
 │   ├── hooks/
-│   │   └── useChatPersistence.ts # Persistencia chat en localStorage
+│   │   ├── useChatPersistence.ts # Persistencia chat (multi-doc)
+│   │   └── useTheme.ts       # Hook de tema dark/light
+│   ├── hooks/__tests__/       # Tests de hooks
+│   │   ├── useChatPersistence.test.ts
+│   │   └── useTheme.test.ts
 │   ├── __tests__/             # Tests frontend (Vitest)
 │   │   ├── ErrorFallback.test.tsx
 │   │   ├── SourceCitation.test.tsx
@@ -163,30 +178,40 @@ pageyn/
 │   └── package.json
 │
 ├── backend/                   # FastAPI
-│   ├── main.py                # App FastAPI
+│   ├── main.py                # App FastAPI + lifespan
 │   ├── config.py              # Configuración (incluye MAX_FILE_SIZE)
+│   ├── database.py            # SQLite metadata store + FTS5
+│   ├── rate_limit.py          # Rate limiting (slowapi)
 │   ├── routers/
-│   │   ├── documents.py       # CRUD documentos
-│   │   └── query.py           # Endpoint de consulta
+│   │   ├── documents.py       # CRUD documentos + chunks + thumbnails
+│   │   └── query.py           # Endpoint de consulta + streaming
 │   ├── services/
 │   │   ├── pdf_extractor.py   # Extracción de texto
 │   │   ├── text_splitter.py   # Chunking
-│   │   ├── embeddings.py      # Generación de embeddings
-│   │   ├── vector_store.py    # Operaciones ChromaDB
-│   │   └── llm.py             # Integración Groq API
+│   │   ├── embeddings.py      # Generación de embeddings (async)
+│   │   ├── vector_store.py    # Operaciones ChromaDB + BM25 híbrido
+│   │   ├── llm.py             # Integración Groq API
+│   │   └── duplicate_detector.py # Detección de duplicados (MD5)
 │   ├── models/
 │   │   └── document.py        # Modelos Pydantic
 │   ├── tests/                 # Tests backend (pytest)
 │   │   ├── conftest.py        # Fixtures AsyncClient
-│   │   ├── test_documents.py  # Tests upload/list/delete
-│   │   └── test_query.py      # Tests query/health
+│   │   ├── test_documents.py  # Tests upload/list/delete/stats
+│   │   ├── test_query.py      # Tests query/health/streaming
+│   │   ├── test_duplicate_detector.py
+│   │   ├── test_embeddings.py
+│   │   ├── test_pdf_extractor.py
+│   │   ├── test_text_splitter.py
+│   │   └── test_vector_store.py
 │   ├── pytest.ini             # Config pytest
 │   └── requirements.txt
 │
 ├── data/
 │   ├── chroma/                # ChromaDB persistente
-│   └── pdfs/                  # PDFs originales + metadata.json
+│   ├── metadata.db            # SQLite metadata + FTS5
+│   └── pdfs/                  # PDFs originales
 │
+├── .env.local.example         # Template de variables de entorno
 ├── package.json               # Scripts de ejecución (raíz)
 ├── stack.md                   # Este archivo
 └── README.md
@@ -228,6 +253,7 @@ groq==0.13.0
 pydantic==2.10.4
 aiosqlite==0.20.0
 python-dotenv==1.0.1
+slowapi==0.1.10
 pytest==8.3.4
 pytest-asyncio==0.25.0
 httpx==0.28.1
@@ -278,13 +304,17 @@ httpx==0.28.1
 
 ## 8. Endpoints API
 
-| Método  | Ruta              | Descripción                           |
-| ------- | ----------------- | ------------------------------------- |
-| `POST`  | `/api/documents`  | Subir PDF (max 50 MB), extraer texto, indexar |
-| `GET`   | `/api/documents`  | Listar documentos indexados           |
-| `DELETE`| `/api/documents/{id}` | Eliminar documento y sus embeddings |
-| `POST`  | `/api/query`      | Consultar la knowledge base           |
-| `GET`   | `/api/health`     | Verificar estado de servicios         |
+| Método  | Ruta                      | Descripción                                    |
+| ------- | ------------------------- | ---------------------------------------------- |
+| `POST`  | `/api/documents`          | Subir PDF (max 50 MB), extraer texto, indexar  |
+| `GET`   | `/api/documents`          | Listar documentos indexados                    |
+| `GET`   | `/api/documents/stats`    | Estadísticas (docs, páginas, chunks, último upload) |
+| `GET`   | `/api/documents/{id}/chunks` | Ver chunks indexados de un documento         |
+| `GET`   | `/api/documents/{id}/thumbnail` | Thumbnail del PDF (primera página)        |
+| `DELETE`| `/api/documents/{id}`     | Eliminar documento y sus embeddings            |
+| `POST`  | `/api/query`              | Consultar la knowledge base                    |
+| `POST`  | `/api/query/stream`       | Consulta con streaming (SSE)                   |
+| `GET`   | `/api/health`             | Verificar estado de servicios                  |
 
 ---
 
@@ -293,10 +323,14 @@ httpx==0.28.1
 ```env
 # backend/.env
 GROQ_API_KEY=gsk_...
+GROQ_MODEL=llama-3.3-70b-versatile
 EMBEDDING_MODEL=all-MiniLM-L6-v2
 CHUNK_SIZE=500
 CHUNK_OVERLAP=50
 TOP_K_RESULTS=5
+
+# frontend/.env.local (opcional)
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
 ```
 
 ---
@@ -321,15 +355,22 @@ TOP_K_RESULTS=5
 2. **Embeddings locales**: Sentence Transformers no tiene costo ni límite de API
 3. **ChromaDB embebido**: Sin servidor vectorial separado
 4. **FastAPI separado de Next.js**: Permite escalar independientemente
-5. **JSON para metadata**: Ligero, sin configuración, archivo único
+5. **SQLite para metadata**: Local, robusto, soporta FTS5 para búsqueda full-text
 6. **LangChain como orquestador**: Pipeline RAG completo con integraciones nativas
 7. **concurrently en raíz**: Un solo comando `npm run dev` arranca backend + frontend
 8. **Error boundaries por ruta**: `error.tsx` en cada segmento + `global-error.tsx` para el layout
 9. **Drag-and-drop real**: API nativa de HTML5, validación PDF + tamaño antes de enviar
 10. **Markdown en chat**: react-markdown con estilos prose para renderizar respuestas del LLM
-11. **Persistencia del chat**: localStorage con hook `useChatPersistence`, máx 50 mensajes
-12. **Límite de 50 MB**: Validación frontend + backend, barra de progreso con colores
-13. **Tests unitarios**: Vitest (frontend, 13 tests) + pytest (backend, 5 tests)
+11. **Persistencia del chat**: localStorage con hook `useChatPersistence`, historial individual por documento
+12. **Multi-select documentos**: Checkbox para seleccionar varios PDFs en el chat
+13. **Búsqueda híbrida BM25 + vectorial**: Reciprocal Rank Fusion para mejores resultados
+14. **Detección de duplicados**: MD5 hash, evita re-indexar PDFs existentes
+15. **Thumbnails de PDFs**: Preview visual de la primera página
+16. **Export de conversaciones**: Descargar chat como Markdown
+17. **Ver chunks indexados**: Modal para auditar calidad del chunking
+18. **Precarga de modelo**: SentenceTransformer se carga en startup, no en primer request
+19. **SSE parsing robusto**: Buffer acumulador para evitar JSON truncado
+20. **Seguridad**: Magic bytes %PDF, sanitización anti-prompt injection, límite de longitud
 
 ---
 
@@ -364,7 +405,7 @@ npm run build                        # build de producción del frontend
 ### Tests
 ```bash
 cd frontend && npm run test          # tests frontend (Vitest)
-cd backend && pytest                 # tests backend (pytest)
+cd backend && python3 -m pytest backend/tests/ -v  # tests backend (pytest)
 ```
 
 ### URLs
@@ -373,3 +414,44 @@ cd backend && pytest                 # tests backend (pytest)
 | Frontend | http://localhost:3000 |
 | Backend API | http://localhost:8000 |
 | API Docs (Swagger) | http://localhost:8000/docs |
+
+---
+
+## 13. Seguridad
+
+| Medida | Implementación |
+|--------|----------------|
+| Rate limiting | slowapi (configurado, pendiente activar) |
+| Magic bytes validation | Verifica `%PDF` al inicio del archivo |
+| Prompt injection | System prompt con disclaimer + ignorar instrucciones del contexto |
+| Límite de tokens | Preguntas máximas 2000 caracteres |
+| CORS | Solo localhost:3000 |
+| File size | 50 MB máximo |
+| Duplicados | MD5 hash, evita re-indexación |
+
+---
+
+## 14. Testing
+
+### Backend (33 tests)
+| Suite | Tests |
+|-------|-------|
+| test_documents.py | 10 |
+| test_query.py | 5 |
+| test_duplicate_detector.py | 6 |
+| test_embeddings.py | 4 |
+| test_pdf_extractor.py | 2 |
+| test_text_splitter.py | 3 |
+| test_vector_store.py | 3 |
+
+### Frontend (31 tests)
+| Suite | Tests |
+|-------|-------|
+| useChatPersistence.test.ts | 11 |
+| useTheme.test.ts | 7 |
+| ErrorFallback.test.tsx | 2 |
+| SourceCitation.test.tsx | 2 |
+| EmptyState.test.tsx | 2 |
+| StatusCard.test.tsx | 2 |
+| LoadingSpinner.test.tsx | 2 |
+| MarkdownMessage.test.tsx | 3 |
