@@ -1,5 +1,5 @@
+import re
 import uuid
-import json
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
@@ -8,21 +8,17 @@ from backend.models.document import DocumentResponse, StatsResponse
 from backend.services.pdf_extractor import extract_text
 from backend.services.text_splitter import split_pages
 from backend.services.vector_store import add_documents, delete_document, get_document_count
-from backend.services.duplicate_detector import compute_content_hash, find_duplicate
+from backend.services.duplicate_detector import compute_content_hash
+from backend.database import load_metadata, save_document, delete_document_metadata, get_document_by_hash
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
-METADATA_FILE = PDF_DIR / "metadata.json"
+MAX_FILENAME_LENGTH = 255
 
 
-def _load_metadata() -> dict:
-    if METADATA_FILE.exists():
-        return json.loads(METADATA_FILE.read_text())
-    return {}
-
-
-def _save_metadata(data: dict):
-    METADATA_FILE.write_text(json.dumps(data, indent=2))
+def _sanitize_filename(filename: str) -> str:
+    safe = re.sub(r"[^\w\-.]", "_", filename)
+    return safe[:MAX_FILENAME_LENGTH]
 
 
 @router.post("", response_model=DocumentResponse)
@@ -30,20 +26,25 @@ async def upload_document(file: UploadFile = File(...)):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos PDF")
 
-    if file.size and file.size > MAX_FILE_SIZE:
+    content = await file.read()
+
+    if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=413,
             detail=f"El archivo excede el limite de {MAX_FILE_SIZE // (1024 * 1024)} MB",
         )
 
-    content = await file.read()
-    content_hash = compute_content_hash(content)
-    metadata = _load_metadata()
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="El archivo esta vacio")
 
-    duplicate_of = find_duplicate(content_hash, metadata)
+    content_hash = compute_content_hash(content)
+
+    existing = get_document_by_hash(content_hash)
+    duplicate_of = existing["id"] if existing else None
 
     doc_id = uuid.uuid4().hex[:12]
-    pdf_path = PDF_DIR / f"{doc_id}_{file.filename}"
+    safe_name = _sanitize_filename(file.filename)
+    pdf_path = PDF_DIR / f"{doc_id}_{safe_name}"
     pdf_path.write_bytes(content)
 
     try:
@@ -55,24 +56,25 @@ async def upload_document(file: UploadFile = File(...)):
             )
 
         chunks = split_pages(extracted["pages"], file.filename)
-        num_chunks = add_documents(chunks, doc_id)
+        num_chunks = await add_documents(chunks, doc_id)
 
-        metadata[doc_id] = {
+        uploaded_at = str(Path(pdf_path).stat().st_mtime)
+        doc = {
             "id": doc_id,
             "filename": file.filename,
             "content_hash": content_hash,
             "pages": extracted["total_pages"],
             "chunks": num_chunks,
-            "uploaded_at": str(Path(pdf_path).stat().st_mtime),
+            "uploaded_at": uploaded_at,
         }
-        _save_metadata(metadata)
+        save_document(doc)
 
         return DocumentResponse(
             id=doc_id,
             filename=file.filename,
             pages=extracted["total_pages"],
             chunks=num_chunks,
-            uploaded_at=metadata[doc_id]["uploaded_at"],
+            uploaded_at=uploaded_at,
             duplicate_of=duplicate_of,
         )
 
@@ -85,16 +87,13 @@ async def upload_document(file: UploadFile = File(...)):
 
 @router.get("", response_model=list[DocumentResponse])
 async def list_documents():
-    metadata = _load_metadata()
-    return [
-        DocumentResponse(**doc)
-        for doc in metadata.values()
-    ]
+    metadata = load_metadata()
+    return [DocumentResponse(**doc) for doc in metadata.values()]
 
 
 @router.get("/stats", response_model=StatsResponse)
 async def get_stats():
-    metadata = _load_metadata()
+    metadata = load_metadata()
     if not metadata:
         return StatsResponse(
             total_documents=0,
@@ -124,7 +123,7 @@ async def get_stats():
 
 @router.delete("/{doc_id}")
 async def remove_document(doc_id: str):
-    metadata = _load_metadata()
+    metadata = load_metadata()
     if doc_id not in metadata:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
 
@@ -134,7 +133,6 @@ async def remove_document(doc_id: str):
     for f in pdf_files:
         f.unlink(missing_ok=True)
 
-    del metadata[doc_id]
-    _save_metadata(metadata)
+    delete_document_metadata(doc_id)
 
     return {"deleted_chunks": deleted}

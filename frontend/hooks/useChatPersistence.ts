@@ -18,6 +18,7 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
+  isError?: boolean;
 }
 
 function getDocKey(docId: string): string {

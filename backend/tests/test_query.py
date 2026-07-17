@@ -1,3 +1,8 @@
+import groq
+import pytest
+from unittest.mock import MagicMock, AsyncMock
+
+
 async def test_health_check(client):
     res = await client.get("/api/health")
     assert res.status_code == 200
@@ -27,3 +32,57 @@ async def test_query_with_groq_not_configured(client, monkeypatch):
     )
     assert res.status_code == 500
     assert "GROQ_API_KEY" in res.json()["detail"]
+
+
+async def test_query_rate_limit(client, monkeypatch):
+    monkeypatch.setattr("backend.routers.query.get_document_count", lambda: 1)
+    monkeypatch.setattr(
+        "backend.routers.query.embed_query",
+        AsyncMock(return_value=[0.1] * 384),
+    )
+    monkeypatch.setattr(
+        "backend.routers.query.query_similar",
+        lambda emb, top_k, doc_id=None: [{"content": "test", "metadata": {"source": "a", "page": 1}, "score": 0.9}],
+    )
+
+    def mock_generate(question, docs):
+        raise groq.RateLimitError(
+            message="rate limited",
+            response=MagicMock(status_code=429),
+            body=None,
+        )
+
+    monkeypatch.setattr("backend.routers.query.generate_answer", mock_generate)
+
+    res = await client.post(
+        "/api/query",
+        json={"question": "test question"},
+    )
+    assert res.status_code == 429
+
+
+async def test_query_auth_error(client, monkeypatch):
+    monkeypatch.setattr("backend.routers.query.get_document_count", lambda: 1)
+    monkeypatch.setattr(
+        "backend.routers.query.embed_query",
+        AsyncMock(return_value=[0.1] * 384),
+    )
+    monkeypatch.setattr(
+        "backend.routers.query.query_similar",
+        lambda emb, top_k, doc_id=None: [{"content": "test", "metadata": {"source": "a", "page": 1}, "score": 0.9}],
+    )
+
+    def mock_generate(question, docs):
+        raise groq.AuthenticationError(
+            message="invalid key",
+            response=MagicMock(status_code=401),
+            body=None,
+        )
+
+    monkeypatch.setattr("backend.routers.query.generate_answer", mock_generate)
+
+    res = await client.post(
+        "/api/query",
+        json={"question": "test question"},
+    )
+    assert res.status_code == 501

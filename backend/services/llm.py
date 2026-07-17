@@ -1,13 +1,14 @@
-from groq import Groq
+import groq
+from fastapi import HTTPException
 from backend.config import GROQ_API_KEY, GROQ_MODEL
 
 _client = None
 
 
-def get_client() -> Groq:
+def get_client() -> groq.Groq:
     global _client
     if _client is None:
-        _client = Groq(api_key=GROQ_API_KEY)
+        _client = groq.Groq(api_key=GROQ_API_KEY)
     return _client
 
 
@@ -43,28 +44,41 @@ def generate_answer(question: str, context_docs: list[dict]) -> str:
     client = get_client()
     messages = _build_messages(question, context_docs)
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        temperature=0.3,
-        max_tokens=2048,
-    )
-
-    return response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=2048,
+        )
+        return response.choices[0].message.content
+    except groq.RateLimitError:
+        raise HTTPException(status_code=429, detail="Límite de solicitudes alcanzado. Intenta más tarde.")
+    except groq.AuthenticationError:
+        raise HTTPException(status_code=501, detail="Error de autenticación con Groq API.")
+    except groq.APIError as e:
+        raise HTTPException(status_code=502, detail=f"Error del servicio Groq: {e.message}")
 
 
 def generate_answer_stream(question: str, context_docs: list[dict]):
     client = get_client()
     messages = _build_messages(question, context_docs)
 
-    stream = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        temperature=0.3,
-        max_tokens=2048,
-        stream=True,
-    )
+    try:
+        stream = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=2048,
+            stream=True,
+        )
 
-    for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except groq.RateLimitError:
+        raise HTTPException(status_code=429, detail="Límite de solicitudes alcanzado. Intenta más tarde.")
+    except groq.AuthenticationError:
+        raise HTTPException(status_code=501, detail="Error de autenticación con Groq API.")
+    except groq.APIError as e:
+        raise HTTPException(status_code=502, detail=f"Error del servicio Groq: {e.message}")

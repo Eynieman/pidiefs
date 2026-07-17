@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { FileText, BookOpen, Layers, Clock, Loader2 } from "lucide-react";
+import { FileText, BookOpen, Layers, Clock, Loader2, Upload, MessageSquare } from "lucide-react";
 
 interface Stats {
   total_documents: number;
@@ -102,7 +102,9 @@ export default function Home() {
           href="/upload"
           className="group rounded-xl border border-gray-200 bg-white p-8 shadow-sm transition hover:shadow-md dark:border-gray-700 dark:bg-gray-800 dark:hover:shadow-lg dark:hover:shadow-gray-900/20"
         >
-          <div className="text-2xl">&#128196;</div>
+          <div className="flex justify-center">
+            <Upload className="h-8 w-8 text-blue-500 dark:text-blue-400" />
+          </div>
           <h2 className="mt-3 font-semibold text-gray-900 dark:text-gray-100">Subir PDFs</h2>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             Extrae texto, genera embeddings y almacena en la base vectorial
@@ -113,7 +115,9 @@ export default function Home() {
           href="/chat"
           className="group rounded-xl border border-gray-200 bg-white p-8 shadow-sm transition hover:shadow-md dark:border-gray-700 dark:bg-gray-800 dark:hover:shadow-lg dark:hover:shadow-gray-900/20"
         >
-          <div className="text-2xl">&#128172;</div>
+          <div className="flex justify-center">
+            <MessageSquare className="h-8 w-8 text-blue-500 dark:text-blue-400" />
+          </div>
           <h2 className="mt-3 font-semibold text-gray-900 dark:text-gray-100">Consultar</h2>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             Haz preguntas sobre tus documentos y recibe respuestas con fuentes

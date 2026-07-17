@@ -16,7 +16,7 @@ export function LoadingSpinner({ message, size = "md" }: LoadingSpinnerProps) {
     <div className="flex flex-col items-center justify-center text-center">
       <Loader2 className={`${sizeClasses[size]} animate-spin text-gray-400`} />
       {message && (
-        <p className="mt-3 text-sm text-gray-500">{message}</p>
+        <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">{message}</p>
       )}
     </div>
   );

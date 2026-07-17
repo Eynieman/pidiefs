@@ -1,5 +1,6 @@
 import json
 
+import groq
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -39,7 +40,7 @@ async def query_knowledge_base(request: QueryRequest):
             detail="No hay documentos indexados. Sube un PDF primero.",
         )
 
-    query_embedding = embed_query(request.question)
+    query_embedding = await embed_query(request.question)
     top_k = min(request.top_k, TOP_K_RESULTS)
     similar_docs = query_similar(query_embedding, top_k=top_k, doc_id=request.doc_id)
 
@@ -49,9 +50,18 @@ async def query_knowledge_base(request: QueryRequest):
             sources=[],
         )
 
-    answer = generate_answer(request.question, similar_docs)
-    sources = _build_sources(similar_docs)
+    try:
+        answer = generate_answer(request.question, similar_docs)
+    except HTTPException:
+        raise
+    except groq.RateLimitError:
+        raise HTTPException(status_code=429, detail="Límite de solicitudes alcanzado. Intenta más tarde.")
+    except groq.AuthenticationError:
+        raise HTTPException(status_code=501, detail="Error de autenticación con Groq API.")
+    except groq.APIError as e:
+        raise HTTPException(status_code=502, detail=f"Error del servicio Groq: {e.message}")
 
+    sources = _build_sources(similar_docs)
     return QueryResponse(answer=answer, sources=sources)
 
 
@@ -70,7 +80,7 @@ async def query_knowledge_base_stream(request: QueryRequest):
             detail="No hay documentos indexados. Sube un PDF primero.",
         )
 
-    query_embedding = embed_query(request.question)
+    query_embedding = await embed_query(request.question)
     top_k = min(request.top_k, TOP_K_RESULTS)
     similar_docs = query_similar(query_embedding, top_k=top_k, doc_id=request.doc_id)
 
@@ -85,8 +95,15 @@ async def query_knowledge_base_stream(request: QueryRequest):
 
     async def stream():
         yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
-        for token in generate_answer_stream(request.question, similar_docs):
-            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+        try:
+            for token in generate_answer_stream(request.question, similar_docs):
+                yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+        except groq.RateLimitError:
+            yield f"data: {json.dumps({'type': 'error', 'content': 'Límite de solicitudes alcanzado'})}\n\n"
+        except groq.AuthenticationError:
+            yield f"data: {json.dumps({'type': 'error', 'content': 'Error de autenticación con Groq'})}\n\n"
+        except groq.APIError as e:
+            yield f"data: {json.dumps({'type': 'error', 'content': f'Error de Groq: {e.message}'})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")

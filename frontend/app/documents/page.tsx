@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { AlertCircle, FolderOpen, Search } from "lucide-react";
+import { AlertCircle, FolderOpen, Search, ChevronLeft, ChevronRight, ArrowUpDown } from "lucide-react";
 import { DocumentCard } from "@/components/DocumentCard";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { EmptyState } from "@/components/EmptyState";
@@ -14,12 +14,17 @@ interface Document {
   uploaded_at: string;
 }
 
+type SortBy = "date" | "name" | "pages";
+const PER_PAGE = 10;
+
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [sortBy, setSortBy] = useState<SortBy>("date");
+  const [page, setPage] = useState(1);
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -65,6 +70,31 @@ export default function DocumentsPage() {
     d.filename.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === "name") return a.filename.localeCompare(b.filename);
+    if (sortBy === "pages") return b.pages - a.pages;
+    return parseFloat(b.uploaded_at) - parseFloat(a.uploaded_at);
+  });
+
+  const totalPages = Math.ceil(sorted.length / PER_PAGE);
+  const paged = sorted.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
+  const handleSearchChange = (value: string) => {
+    setSearchTerm(value);
+    setPage(1);
+  };
+
+  const handleSortChange = (value: SortBy) => {
+    setSortBy(value);
+    setPage(1);
+  };
+
+  const sortOptions: { value: SortBy; label: string }[] = [
+    { value: "date", label: "Reciente" },
+    { value: "name", label: "Nombre" },
+    { value: "pages", label: "Paginas" },
+  ];
+
   return (
     <div className="mx-auto max-w-3xl px-4 py-12">
       <div className="flex items-center justify-between">
@@ -89,10 +119,29 @@ export default function DocumentsPage() {
           <input
             type="text"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Buscar por nombre..."
             className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-4 text-sm outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:focus:border-blue-400"
           />
+        </div>
+      )}
+
+      {!loading && !error && documents.length > 0 && (
+        <div className="mt-4 flex items-center gap-2">
+          <ArrowUpDown className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+          {sortOptions.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => handleSortChange(opt.value)}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                sortBy === opt.value
+                  ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                  : "text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       )}
 
@@ -134,9 +183,9 @@ export default function DocumentsPage() {
         />
       )}
 
-      {!loading && filtered.length > 0 && (
+      {!loading && paged.length > 0 && (
         <div className="mt-6 space-y-3">
-          {filtered.map((doc) => (
+          {paged.map((doc) => (
             <DocumentCard
               key={doc.id}
               document={doc}
@@ -144,6 +193,28 @@ export default function DocumentsPage() {
               isDeleting={deletingId === doc.id}
             />
           ))}
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <div className="mt-6 flex items-center justify-center gap-4">
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1}
+            className="rounded-lg border border-gray-300 p-2 text-gray-600 transition hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span className="text-sm text-gray-500 dark:text-gray-400">
+            Pagina {page} de {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page === totalPages}
+            className="rounded-lg border border-gray-300 p-2 text-gray-600 transition hover:bg-gray-50 disabled:opacity-40 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-800"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
         </div>
       )}
     </div>

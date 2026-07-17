@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2, Trash2, Lightbulb } from "lucide-react";
+import { Send, Loader2, Trash2, Lightbulb, Square, AlertCircle, Copy, Check } from "lucide-react";
 import { SourceCitation } from "@/components/SourceCitation";
 import { MarkdownMessage } from "@/components/MarkdownMessage";
 import { useChatPersistence } from "@/hooks/useChatPersistence";
@@ -32,6 +32,8 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [documents, setDocuments] = useState<Document[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -57,11 +59,15 @@ export default function ChatPage() {
       body.doc_id = selectedDocId;
     }
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const res = await fetch("/api/query/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -120,16 +126,34 @@ export default function ChatPage() {
         }
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "No se pudo conectar con el backend";
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: `Error: ${message}` },
-      ]);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "Generacion detenida por el usuario.", isError: true },
+        ]);
+      } else {
+        const message = err instanceof Error ? err.message : "No se pudo conectar con el backend";
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: message, isError: true },
+        ]);
+      }
     } finally {
       setLoading(false);
+      abortRef.current = null;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [input, loading, selectedDocId]);
+
+  const handleStop = () => {
+    abortRef.current?.abort();
+  };
+
+  const handleCopy = (content: string, idx: number) => {
+    navigator.clipboard.writeText(content);
+    setCopiedIdx(idx);
+    setTimeout(() => setCopiedIdx(null), 2000);
+  };
 
   const selectedDoc = documents.find((d) => d.id === selectedDocId);
 
@@ -200,15 +224,36 @@ export default function ChatPage() {
                 className={`max-w-[80%] rounded-xl px-4 py-3 ${
                   msg.role === "user"
                     ? "bg-blue-600 text-white"
-                    : "border border-gray-200 bg-white text-gray-900 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
+                    : msg.isError
+                      ? "border border-red-200 bg-red-50 text-red-700 shadow-sm dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+                      : "border border-gray-200 bg-white text-gray-900 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100"
                 }`}
               >
                 {msg.role === "assistant" ? (
-                  <MarkdownMessage content={msg.content} />
+                  msg.isError ? (
+                    <div className="flex items-start gap-2 text-sm">
+                      <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                      <p>{msg.content}</p>
+                    </div>
+                  ) : (
+                    <MarkdownMessage content={msg.content} />
+                  )
                 ) : (
                   <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
                 )}
                 {msg.sources && <SourceCitation sources={msg.sources} />}
+                {msg.role === "assistant" && !msg.isError && msg.content && (
+                  <button
+                    onClick={() => handleCopy(msg.content, i)}
+                    className="mt-2 flex items-center gap-1 text-xs text-gray-400 transition hover:text-gray-600 dark:hover:text-gray-300"
+                  >
+                    {copiedIdx === i ? (
+                      <><Check className="h-3 w-3" /> Copiado</>
+                    ) : (
+                      <><Copy className="h-3 w-3" /> Copiar</>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -234,18 +279,28 @@ export default function ChatPage() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSend()}
+            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
             placeholder="Escribe tu pregunta..."
             disabled={loading}
             className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:focus:border-blue-400"
           />
-          <button
-            onClick={() => handleSend()}
-            disabled={!input.trim() || loading}
-            className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Send className="h-4 w-4" />
-          </button>
+          {loading ? (
+            <button
+              onClick={handleStop}
+              className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-red-700"
+              title="Detener generacion"
+            >
+              <Square className="h-4 w-4" />
+            </button>
+          ) : (
+            <button
+              onClick={() => handleSend()}
+              disabled={!input.trim() || loading}
+              className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
     </div>

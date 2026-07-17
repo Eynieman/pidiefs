@@ -18,11 +18,11 @@ def get_collection():
     return _collection
 
 
-def add_documents(documents: list[Document], doc_id: str) -> int:
+async def add_documents(documents: list[Document], doc_id: str) -> int:
     collection = get_collection()
 
     texts = [doc.page_content for doc in documents]
-    embeddings = embed_texts(texts)
+    embeddings = await embed_texts(texts)
 
     ids = [f"{doc_id}_chunk_{i}" for i in range(len(documents))]
     metadatas = [

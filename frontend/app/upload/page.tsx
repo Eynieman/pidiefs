@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { Upload, FileText, Loader2, X, CheckCircle2, AlertCircle, AlertTriangle } from "lucide-react";
+import { Upload, FileText, Loader2, X, CheckCircle2, AlertCircle, AlertTriangle, RotateCcw, Trash } from "lucide-react";
 import { StatusCard } from "@/components/StatusCard";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
+const CONCURRENT_UPLOADS = 3;
 
 interface UploadResult {
   id: string;
@@ -56,6 +57,12 @@ export default function UploadPage() {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const retryFile = (index: number) => {
+    setFiles((prev) =>
+      prev.map((f, i) => (i === index ? { ...f, status: "pending", error: undefined } : f))
+    );
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) addFiles(e.target.files);
     if (inputRef.current) inputRef.current.value = "";
@@ -85,61 +92,64 @@ export default function UploadPage() {
     if (e.dataTransfer.files) addFiles(e.dataTransfer.files);
   };
 
+  const uploadSingle = useCallback(async (item: FileItem, idx: number) => {
+    const formData = new FormData();
+    formData.append("file", item.file);
+
+    try {
+      const res = await fetch("/api/documents", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.detail || "Error al subir");
+      }
+
+      const data: UploadResult = await res.json();
+
+      setFiles((prev) =>
+        prev.map((f, i) =>
+          i === idx
+            ? { ...f, status: data.duplicate_of ? "duplicate" : "done", result: data }
+            : f
+        ),
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error de conexion";
+      setFiles((prev) =>
+        prev.map((f, i) =>
+          i === idx ? { ...f, status: "error", error: message } : f
+        ),
+      );
+    }
+  }, []);
+
   const handleUploadAll = useCallback(async () => {
-    const toUpload = files.filter((f) => f.status === "pending");
+    const toUpload = files
+      .map((f, i) => ({ item: f, idx: i }))
+      .filter(({ item }) => item.status === "pending");
     if (toUpload.length === 0) return;
 
     setUploading(true);
 
-    for (const item of toUpload) {
-      const idx = files.indexOf(item);
-      setFiles((prev) =>
-        prev.map((f, i) => (i === idx ? { ...f, status: "uploading" } : f)),
+    setFiles((prev) =>
+      prev.map((f) => (f.status === "pending" ? { ...f, status: "uploading" } : f))
+    );
+
+    for (let i = 0; i < toUpload.length; i += CONCURRENT_UPLOADS) {
+      const batch = toUpload.slice(i, i + CONCURRENT_UPLOADS);
+      await Promise.allSettled(
+        batch.map(({ item, idx }) => uploadSingle({ ...item, status: "uploading" }, idx))
       );
-
-      const formData = new FormData();
-      formData.append("file", item.file);
-
-      try {
-        const res = await fetch("/api/documents", {
-          method: "POST",
-          body: formData,
-        });
-
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.detail || "Error al subir");
-        }
-
-        const data: UploadResult = await res.json();
-
-        if (data.duplicate_of) {
-          setFiles((prev) =>
-            prev.map((f, i) =>
-              i === idx ? { ...f, status: "duplicate", result: data } : f,
-            ),
-          );
-        } else {
-          setFiles((prev) =>
-            prev.map((f, i) =>
-              i === idx ? { ...f, status: "done", result: data } : f,
-            ),
-          );
-        }
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Error de conexion";
-        setFiles((prev) =>
-          prev.map((f, i) =>
-            i === idx ? { ...f, status: "error", error: message } : f,
-          ),
-        );
-      }
     }
 
     setUploading(false);
-  }, [files]);
+  }, [files, uploadSingle]);
 
   const pendingCount = files.filter((f) => f.status === "pending").length;
+  const uploadingCount = files.filter((f) => f.status === "uploading").length;
   const doneCount = files.filter((f) => f.status === "done").length;
   const duplicateCount = files.filter((f) => f.status === "duplicate").length;
   const hasFiles = files.length > 0;
@@ -230,6 +240,15 @@ export default function UploadPage() {
                 <AlertTriangle className="h-4 w-4 text-yellow-500" />
               )}
               {item.status === "error" && (
+                <button
+                  onClick={() => retryFile(i)}
+                  className="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-blue-600 dark:hover:bg-gray-700 dark:hover:text-blue-400"
+                  title="Reintentar"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                </button>
+              )}
+              {item.status === "error" && (
                 <span className="text-xs text-red-500 dark:text-red-400" title={item.error}>
                   Error
                 </span>
@@ -251,13 +270,23 @@ export default function UploadPage() {
           {uploading ? (
             <span className="flex items-center justify-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Subiendo...
+              Subiendo {uploadingCount}...
             </span>
           ) : doneCount > 0 ? (
             `Subir ${pendingCount} restante${pendingCount !== 1 ? "s" : ""}`
           ) : (
             `Subir ${files.length} archivo${files.length !== 1 ? "s" : ""}`
           )}
+        </button>
+      )}
+
+      {hasFiles && (doneCount > 0 || duplicateCount > 0) && (
+        <button
+          onClick={() => setFiles([])}
+          className="mt-2 flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+        >
+          <Trash className="h-3.5 w-3.5" />
+          Limpiar lista
         </button>
       )}
 
