@@ -16,21 +16,7 @@ router = APIRouter(prefix="/api", tags=["query"])
 MAX_QUESTION_LENGTH = 2000
 
 
-def _build_sources(similar_docs: list[dict]) -> list[dict]:
-    return [
-        {
-            "content": doc["content"][:300] + "..." if len(doc["content"]) > 300 else doc["content"],
-            "source": doc["metadata"].get("source", "desconocido"),
-            "page": doc["metadata"].get("page", 0),
-            "score": round(doc["score"], 3),
-        }
-        for doc in similar_docs
-    ]
-
-
-@router.post("/query", response_model=QueryResponse)
-@limiter.limit("30/minute")
-async def query_knowledge_base(request: Request, query_request: QueryRequest):
+def _validate_query_request(query_request: QueryRequest) -> None:
     if len(query_request.question) > MAX_QUESTION_LENGTH:
         raise HTTPException(
             status_code=400,
@@ -49,6 +35,24 @@ async def query_knowledge_base(request: Request, query_request: QueryRequest):
             status_code=400,
             detail="No hay documentos indexados. Sube un PDF primero.",
         )
+
+
+def _build_sources(similar_docs: list[dict]) -> list[dict]:
+    return [
+        {
+            "content": doc["content"][:300] + "..." if len(doc["content"]) > 300 else doc["content"],
+            "source": doc["metadata"].get("source", "desconocido"),
+            "page": doc["metadata"].get("page", 0),
+            "score": round(doc["score"], 3),
+        }
+        for doc in similar_docs
+    ]
+
+
+@router.post("/query", response_model=QueryResponse)
+@limiter.limit("30/minute")
+async def query_knowledge_base(request: Request, query_request: QueryRequest):
+    _validate_query_request(query_request)
 
     query_embedding = await embed_query(query_request.question)
     top_k = min(query_request.top_k, TOP_K_RESULTS)
@@ -84,24 +88,7 @@ async def query_knowledge_base(request: Request, query_request: QueryRequest):
 @router.post("/query/stream")
 @limiter.limit("30/minute")
 async def query_knowledge_base_stream(request: Request, query_request: QueryRequest):
-    if len(query_request.question) > MAX_QUESTION_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"La pregunta excede el límite de {MAX_QUESTION_LENGTH} caracteres",
-        )
-
-    if not GROQ_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="GROQ_API_KEY no configurada. Obtén una gratis en https://console.groq.com",
-        )
-
-    doc_count = get_document_count()
-    if doc_count == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="No hay documentos indexados. Sube un PDF primero.",
-        )
+    _validate_query_request(query_request)
 
     query_embedding = await embed_query(query_request.question)
     top_k = min(query_request.top_k, TOP_K_RESULTS)
@@ -133,6 +120,8 @@ async def query_knowledge_base_stream(request: Request, query_request: QueryRequ
             yield f"data: {json.dumps({'type': 'error', 'content': 'Error de autenticación con Groq'})}\n\n"
         except groq.APIError as e:
             yield f"data: {json.dumps({'type': 'error', 'content': f'Error de Groq: {e.message}'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'content': f'Error inesperado: {str(e)}'})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")

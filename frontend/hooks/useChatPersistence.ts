@@ -63,7 +63,18 @@ function loadMessagesForDoc(docId: string): Message[] {
 
 function saveMessagesForDoc(docId: string, msgs: Message[]) {
   const toSave = msgs.slice(-MAX_MESSAGES);
-  localStorage.setItem(getDocKey(docId), JSON.stringify(toSave));
+  try {
+    localStorage.setItem(getDocKey(docId), JSON.stringify(toSave));
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "QuotaExceededError") {
+      const reduced = toSave.slice(-Math.floor(MAX_MESSAGES / 2));
+      try {
+        localStorage.setItem(getDocKey(docId), JSON.stringify(reduced));
+      } catch {
+        // Still failing, silently continue
+      }
+    }
+  }
 }
 
 function migrateIfNeeded() {

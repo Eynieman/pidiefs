@@ -6,7 +6,7 @@ DB_PATH = DATA_DIR / "metadata.db"
 
 
 def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -14,7 +14,7 @@ def get_db() -> sqlite3.Connection:
 def sanitize_fts5_query(query: str) -> str:
     # Eliminar operadores especiales de FTS5 que pueden alterar la búsqueda
     # Mantener solo texto plano para búsqueda segura
-    sanitized = re.sub(r'["*+\-^:(){}[\]<>]', ' ', query)
+    sanitized = re.sub(r'[?"*+\-^:(){}[\]<>]', ' ', query)
     sanitized = re.sub(r'\b(AND|OR|NOT|NEAR)\b', ' ', sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r'\s+', ' ', sanitized).strip()
     if not sanitized:
@@ -41,9 +41,7 @@ def init_db():
                 chunk_id,
                 content,
                 source,
-                page,
-                content='chunks',
-                content_rowid='rowid'
+                page
             )
         """)
         conn.execute("""
@@ -103,11 +101,20 @@ def save_chunks(doc_id: str, chunks: list[dict]):
                 VALUES (?, ?, ?, ?, ?)""",
                 (doc_id, chunk["chunk_id"], chunk["content"], chunk["source"], chunk["page"]),
             )
+            conn.execute(
+                """INSERT INTO chunks_fts (doc_id, chunk_id, content, source, page)
+                VALUES (?, ?, ?, ?, ?)""",
+                (doc_id, chunk["chunk_id"], chunk["content"], chunk["source"], chunk["page"]),
+            )
         conn.commit()
 
 
 def delete_chunks(doc_id: str):
     with get_db() as conn:
+        try:
+            conn.execute("DELETE FROM chunks_fts WHERE doc_id = ?", (doc_id,))
+        except Exception:
+            pass
         conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
         conn.commit()
 
@@ -118,18 +125,16 @@ def bm25_search(query: str, top_k: int = 10, doc_ids: list[str] | None = None) -
         if doc_ids:
             placeholders = ",".join("?" for _ in doc_ids)
             rows = conn.execute(
-                f"""SELECT c.doc_id, c.chunk_id, c.content, c.source, c.page,
-                    rank FROM chunks_fts f
-                    JOIN chunks c ON f.rowid = c.rowid
-                    WHERE chunks_fts MATCH ? AND c.doc_id IN ({placeholders})
+                f"""SELECT doc_id, chunk_id, content, source, page,
+                    rank FROM chunks_fts
+                    WHERE chunks_fts MATCH ? AND doc_id IN ({placeholders})
                     ORDER BY rank LIMIT ?""",
                 [safe_query] + doc_ids + [top_k],
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT c.doc_id, c.chunk_id, c.content, c.source, c.page,
-                    rank FROM chunks_fts f
-                    JOIN chunks c ON f.rowid = c.rowid
+                """SELECT doc_id, chunk_id, content, source, page,
+                    rank FROM chunks_fts
                     WHERE chunks_fts MATCH ?
                     ORDER BY rank LIMIT ?""",
                 (safe_query, top_k),
@@ -147,6 +152,10 @@ def bm25_search(query: str, top_k: int = 10, doc_ids: list[str] | None = None) -
 
 def delete_document_metadata(doc_id: str) -> bool:
     with get_db() as conn:
+        try:
+            conn.execute("DELETE FROM chunks_fts WHERE doc_id = ?", (doc_id,))
+        except Exception:
+            pass
         cursor = conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
         conn.commit()
         return cursor.rowcount > 0

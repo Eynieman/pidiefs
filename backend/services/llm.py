@@ -79,8 +79,8 @@ def generate_answer_stream(question: str, context_docs: list[dict]):
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
     except groq.RateLimitError:
-        raise HTTPException(status_code=429, detail="Límite de solicitudes alcanzado. Intenta más tarde.")
+        raise
     except groq.AuthenticationError:
-        raise HTTPException(status_code=501, detail="Error de autenticación con Groq API.")
-    except groq.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Error del servicio Groq: {e.message}")
+        raise
+    except groq.APIError:
+        raise

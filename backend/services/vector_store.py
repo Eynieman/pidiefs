@@ -55,7 +55,7 @@ def _reciprocal_rank_fusion(results_list: list[list[dict]], k: int = 60) -> list
             fused_scores[key] = fused_scores.get(key, 0) + 1.0 / (k + rank + 1)
             doc_map[key] = doc
 
-    sorted_keys = sorted(fused_scores.keys(), key=lambda k: fused_scores[k], reverse=True)
+    sorted_keys = sorted(fused_scores.keys(), key=lambda key: fused_scores[key], reverse=True)
     return [{**doc_map[key], "score": fused_scores[key]} for key in sorted_keys]
 
 
@@ -114,9 +114,5 @@ def delete_document(doc_id: str) -> int:
 
 
 def get_document_count() -> int:
-    collection = get_collection()
-    results = collection.get(include=["metadatas"])
-    if not results["metadatas"]:
-        return 0
-    doc_ids = {m.get("doc_id") for m in results["metadatas"]}
-    return len(doc_ids)
+    from backend.database import load_metadata
+    return len(load_metadata())

@@ -58,10 +58,6 @@ async def upload_document(request: Request, file: UploadFile = File(...), backgr
 
     existing = get_document_by_hash(content_hash)
     if existing:
-        doc_id = uuid.uuid4().hex[:12]
-        safe_name = _sanitize_filename(file.filename)
-        pdf_path = PDF_DIR / f"{doc_id}_{safe_name}"
-        pdf_path.write_bytes(content)
         return DocumentResponse(
             id=existing["id"],
             filename=file.filename,
@@ -282,8 +278,12 @@ async def get_document_thumbnail(request: Request, doc_id: str):
             font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 12)
             small_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 10)
         except Exception:
-            font = ImageFont.load_default()
-            small_font = font
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+                small_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
+            except Exception:
+                font = ImageFont.load_default()
+                small_font = font
 
         draw.rectangle([0, 0, 199, 30], fill="#3B82F6")
         draw.text((10, 8), metadata[doc_id]["filename"][:25], fill="white", font=small_font)

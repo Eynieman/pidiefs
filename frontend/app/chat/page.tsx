@@ -148,6 +148,15 @@ export default function ChatPage() {
                 }
                 return msgs;
               });
+            } else if (parsed.type === "error") {
+              setMessages((prev) => {
+                const msgs = [...prev];
+                const last = msgs[msgs.length - 1];
+                if (last.role === "assistant") {
+                  msgs[msgs.length - 1] = { ...last, content: parsed.content, isError: true };
+                }
+                return msgs;
+              });
             }
           } catch {
             // skip malformed SSE lines

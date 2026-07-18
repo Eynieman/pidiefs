@@ -1,8 +1,7 @@
 import logging
 
-import httpx
-
 from backend.config import GROQ_API_KEY, GROQ_MODEL
+from backend.services.llm import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -22,23 +21,14 @@ def generate_pdf_summary(filename: str, content: str) -> str:
     )
 
     try:
-        response = httpx.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": GROQ_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 300,
-            },
-            timeout=30,
+        client = get_client()
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=300,
         )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
+        return response.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"Failed to generate summary for {filename}: {e}")
         return ""

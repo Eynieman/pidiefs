@@ -11,6 +11,7 @@ from backend.database import (
     delete_conversation,
     add_chat_message,
     get_chat_messages,
+    load_metadata,
 )
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -36,6 +37,14 @@ async def list_conversations(request: Request):
 @router.post("")
 @limiter.limit("30/minute")
 async def create_new_conversation(request: Request, body: CreateConversationRequest):
+    if body.doc_ids:
+        metadata = load_metadata()
+        invalid_ids = [doc_id for doc_id in body.doc_ids if doc_id not in metadata]
+        if invalid_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Documentos no encontrados: {', '.join(invalid_ids)}",
+            )
     conversation_id = uuid.uuid4().hex[:12]
     conv = create_conversation(conversation_id, body.doc_ids, body.title)
     return conv
