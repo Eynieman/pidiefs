@@ -1,7 +1,9 @@
 import json
+import os
 import re
 
 import groq
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
@@ -10,8 +12,9 @@ import logging
 from backend.models.document import QueryRequest, QueryResponse
 from backend.services.embeddings import embed_query
 from backend.services.vector_store import query_similar, get_document_count
-from backend.services.llm import generate_answer, generate_answer_stream
+from backend.services.llm import generate_answer, generate_answer_stream, generate_followups
 from backend.services.guardrails import validate_llm_input
+from backend.services.query_classifier import classify_query, get_retrieval_strategy
 from backend.config import TOP_K_RESULTS, GROQ_API_KEY
 from backend.rate_limit import limiter
 
@@ -22,6 +25,10 @@ router = APIRouter(prefix="/api", tags=["query"])
 MAX_QUESTION_LENGTH = 2000
 DOC_ID_PATTERN = re.compile(r"^[a-f0-9]{12}$")
 
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+WHATSAPP_TO_NUMBER = os.getenv("WHATSAPP_TO_NUMBER", "")
+
 
 def _validate_query_request(query_request: QueryRequest) -> None:
     question = query_request.question.strip()
@@ -30,13 +37,13 @@ def _validate_query_request(query_request: QueryRequest) -> None:
     if not question:
         raise HTTPException(
             status_code=400,
-            detail="La pregunta no puede estar vacía",
+            detail="La pregunta no puede estar vacia",
         )
 
     if len(question) > MAX_QUESTION_LENGTH:
         raise HTTPException(
             status_code=400,
-            detail=f"La pregunta excede el límite de {MAX_QUESTION_LENGTH} caracteres",
+            detail=f"La pregunta excede el limite de {MAX_QUESTION_LENGTH} caracteres",
         )
 
     if any(ord(c) < 0x20 and c not in ("\n", "\t", "\r") for c in question):
@@ -48,7 +55,7 @@ def _validate_query_request(query_request: QueryRequest) -> None:
     if query_request.doc_id and not DOC_ID_PATTERN.match(query_request.doc_id):
         raise HTTPException(
             status_code=400,
-            detail="ID de documento inválido",
+            detail="ID de documento invalido",
         )
 
     if query_request.doc_ids:
@@ -56,13 +63,13 @@ def _validate_query_request(query_request: QueryRequest) -> None:
             if not DOC_ID_PATTERN.match(did):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"ID de documento inválido: {did}",
+                    detail=f"ID de documento invalido: {did}",
                 )
 
     if question in ("", "...", "?"):
         raise HTTPException(
             status_code=400,
-            detail="Pregunta inválida",
+            detail="Pregunta invalida",
         )
 
     if not GROQ_API_KEY:
@@ -71,7 +78,6 @@ def _validate_query_request(query_request: QueryRequest) -> None:
             detail="GROQ_API_KEY no configurada. Obtén una gratis en https://console.groq.com",
         )
 
-    # Input guardrails
     input_result = validate_llm_input(question)
     if not input_result["safe"]:
         if input_result.get("has_pii"):
@@ -92,13 +98,48 @@ def _validate_query_request(query_request: QueryRequest) -> None:
         )
 
 
-def _build_sources(similar_docs: list[dict]) -> list[dict]:
+async def _retrieve_with_fallback(
+    question: str,
+    embedding: list[float],
+    strategy: dict,
+    doc_id: str | None = None,
+    doc_ids: list[str] | None = None,
+) -> tuple[list[dict], str]:
+    levels = strategy["levels"]
+    top_k = strategy["top_k"]
+    docs = query_similar(
+        embedding,
+        top_k=top_k,
+        doc_id=doc_id,
+        doc_ids=doc_ids,
+        query_text=question,
+        abstraction_levels=levels,
+    )
+
+    if not docs and levels != [0]:
+        logger.info("Retrieval vacío con levels=%s, fallback a local", levels)
+        docs = query_similar(
+            embedding,
+            top_k=5,
+            doc_id=doc_id,
+            doc_ids=doc_ids,
+            query_text=question,
+            abstraction_levels=[0],
+        )
+        return docs, "local"
+
+    return docs, strategy.get("prompt_key", "local")
+
+
+def _build_sources(similar_docs: list[dict], query_type: str = "local") -> list[dict]:
     return [
         {
             "content": doc["content"][:300] + "..." if len(doc["content"]) > 300 else doc["content"],
             "source": doc["metadata"].get("source", "desconocido"),
             "page": doc["metadata"].get("page", 0),
             "score": round(doc["score"], 3),
+            "abstraction_level": doc["metadata"].get("abstraction_level", 0),
+            "cluster_topic": doc["metadata"].get("cluster_topic", ""),
         }
         for doc in similar_docs
     ]
@@ -109,35 +150,44 @@ def _build_sources(similar_docs: list[dict]) -> list[dict]:
 async def query_knowledge_base(request: Request, query_request: QueryRequest):
     _validate_query_request(query_request)
 
+    query_type = query_request.query_type or "auto"
+    if query_type == "auto":
+        classification = classify_query(query_request.question)
+        query_type = classification["type"]
+        logger.info("Query classified as '%s' (confidence: %.2f, method: %s)",
+                     query_type, classification.get("confidence", 0), classification.get("method", "unknown"))
+
+    strategy = get_retrieval_strategy(query_type)
+
     query_embedding = await embed_query(query_request.question)
-    top_k = min(query_request.top_k, TOP_K_RESULTS)
-    similar_docs = query_similar(
-        query_embedding,
-        top_k=top_k,
+    similar_docs, prompt_type = await _retrieve_with_fallback(
+        question=query_request.question,
+        embedding=query_embedding,
+        strategy=strategy,
         doc_id=query_request.doc_id,
         doc_ids=query_request.doc_ids,
-        query_text=query_request.question,
     )
 
     if not similar_docs:
         return QueryResponse(
-            answer="No encontré información relevante para tu pregunta.",
+            answer="No encontre informacion relevante para tu pregunta.",
             sources=[],
+            query_type=query_type,
         )
 
     try:
-        answer = generate_answer(query_request.question, similar_docs)
+        answer = generate_answer(query_request.question, similar_docs, prompt_type)
     except HTTPException:
         raise
     except groq.RateLimitError:
-        raise HTTPException(status_code=429, detail="Límite de solicitudes alcanzado. Intenta más tarde.")
+        raise HTTPException(status_code=429, detail="Limite de solicitudes alcanzado. Intenta mas tarde.")
     except groq.AuthenticationError:
-        raise HTTPException(status_code=501, detail="Error de autenticación con Groq API.")
+        raise HTTPException(status_code=501, detail="Error de autenticacion con Groq API.")
     except groq.APIError as e:
         raise HTTPException(status_code=502, detail=f"Error del servicio Groq: {e.message}")
 
-    sources = _build_sources(similar_docs)
-    return QueryResponse(answer=answer, sources=sources)
+    sources = _build_sources(similar_docs, query_type)
+    return QueryResponse(answer=answer, sources=sources, query_type=query_type)
 
 
 @router.post("/query/stream")
@@ -145,38 +195,54 @@ async def query_knowledge_base(request: Request, query_request: QueryRequest):
 async def query_knowledge_base_stream(request: Request, query_request: QueryRequest):
     _validate_query_request(query_request)
 
+    query_type = query_request.query_type or "auto"
+    if query_type == "auto":
+        classification = classify_query(query_request.question)
+        query_type = classification["type"]
+        logger.info("Query classified as '%s' (confidence: %.2f, method: %s)",
+                     query_type, classification.get("confidence", 0), classification.get("method", "unknown"))
+
+    strategy = get_retrieval_strategy(query_type)
+
     query_embedding = await embed_query(query_request.question)
-    top_k = min(query_request.top_k, TOP_K_RESULTS)
-    similar_docs = query_similar(
-        query_embedding,
-        top_k=top_k,
+    similar_docs, prompt_type = await _retrieve_with_fallback(
+        question=query_request.question,
+        embedding=query_embedding,
+        strategy=strategy,
         doc_id=query_request.doc_id,
         doc_ids=query_request.doc_ids,
-        query_text=query_request.question,
     )
 
     if not similar_docs:
         async def empty():
-            yield f"data: {json.dumps({'type': 'sources', 'sources': []})}\n\n"
-            yield f"data: {json.dumps({'type': 'token', 'content': 'No encontré información relevante para tu pregunta.'})}\n\n"
+            yield f"data: {json.dumps({'type': 'sources', 'sources': [], 'query_type': query_type})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'content': 'No encontre informacion relevante para tu pregunta.'})}\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(empty(), media_type="text/event-stream")
 
-    sources = _build_sources(similar_docs)
+    sources = _build_sources(similar_docs, query_type)
 
     async def stream():
-        yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+        yield f"data: {json.dumps({'type': 'sources', 'sources': sources, 'query_type': query_type})}\n\n"
+        full_answer = ""
         try:
-            for token in generate_answer_stream(query_request.question, similar_docs):
+            for token in generate_answer_stream(query_request.question, similar_docs, prompt_type):
+                full_answer += token
                 yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
         except groq.RateLimitError:
-            yield f"data: {json.dumps({'type': 'error', 'content': 'Límite de solicitudes alcanzado'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': 'Limite de solicitudes alcanzado'})}\n\n"
         except groq.AuthenticationError:
-            yield f"data: {json.dumps({'type': 'error', 'content': 'Error de autenticación con Groq'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': 'Error de autenticacion con Groq'})}\n\n"
         except groq.APIError as e:
             yield f"data: {json.dumps({'type': 'error', 'content': f'Error de Groq: {e.message}'})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'content': f'Error inesperado: {str(e)}'})}\n\n"
+
+        if full_answer:
+            followups = generate_followups(query_request.question, full_answer)
+            if followups:
+                yield f"data: {json.dumps({'type': 'followups', 'followups': followups})}\n\n"
+
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")
@@ -190,3 +256,40 @@ async def health_check(request: Request):
         "groq_configured": bool(GROQ_API_KEY),
         "documents_indexed": get_document_count(),
     }
+
+
+@router.get("/health/whatsapp")
+@limiter.limit("10/minute")
+async def whatsapp_health(request: Request):
+    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, WHATSAPP_TO_NUMBER]):
+        return {
+            "configured": False,
+            "error": "Faltan credenciales de Twilio en .env",
+        }
+
+    try:
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+        data = {
+            "Body": "🧪 Prueba de notificación desde pidiefs",
+            "From": "whatsapp:+14155238886",
+            "To": f"whatsapp:{WHATSAPP_TO_NUMBER}",
+        }
+        response = httpx.post(url, data=data, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=10)
+        response.raise_for_status()
+        return {
+            "configured": True,
+            "working": True,
+            "message_sid": response.json().get("sid"),
+        }
+    except httpx.HTTPStatusError as e:
+        return {
+            "configured": True,
+            "working": False,
+            "error": f"Twilio API error {e.response.status_code}: {e.response.text}",
+        }
+    except Exception as e:
+        return {
+            "configured": True,
+            "working": False,
+            "error": str(e),
+        }

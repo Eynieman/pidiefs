@@ -42,10 +42,10 @@ async def test_query_rate_limit(client, monkeypatch):
     )
     monkeypatch.setattr(
         "backend.routers.query.query_similar",
-        lambda emb, top_k, doc_id=None, doc_ids=None, query_text=None: [{"content": "test", "metadata": {"source": "a", "page": 1}, "score": 0.9}],
+        lambda emb, top_k, doc_id=None, doc_ids=None, query_text=None, abstraction_levels=None: [{"content": "test", "metadata": {"source": "a", "page": 1, "abstraction_level": 0}, "score": 0.9}],
     )
 
-    def mock_generate(question, docs):
+    def mock_generate(question, docs, query_type="local"):
         raise groq.RateLimitError(
             message="rate limited",
             response=MagicMock(status_code=429),
@@ -69,10 +69,10 @@ async def test_query_auth_error(client, monkeypatch):
     )
     monkeypatch.setattr(
         "backend.routers.query.query_similar",
-        lambda emb, top_k, doc_id=None, doc_ids=None, query_text=None: [{"content": "test", "metadata": {"source": "a", "page": 1}, "score": 0.9}],
+        lambda emb, top_k, doc_id=None, doc_ids=None, query_text=None, abstraction_levels=None: [{"content": "test", "metadata": {"source": "a", "page": 1, "abstraction_level": 0}, "score": 0.9}],
     )
 
-    def mock_generate(question, docs):
+    def mock_generate(question, docs, query_type="local"):
         raise groq.AuthenticationError(
             message="invalid key",
             response=MagicMock(status_code=401),

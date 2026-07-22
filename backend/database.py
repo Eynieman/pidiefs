@@ -14,7 +14,7 @@ def get_db() -> sqlite3.Connection:
 def sanitize_fts5_query(query: str) -> str:
     # Eliminar operadores especiales de FTS5 que pueden alterar la búsqueda
     # Mantener solo texto plano para búsqueda segura
-    sanitized = re.sub(r'[?"*+\-^:(){}[\]<>=/]', ' ', query)
+    sanitized = re.sub(r'[?"*+\-^:(){}[\]<>=/.,;]', ' ', query)
     sanitized = re.sub(r'\b(AND|OR|NOT|NEAR)\b', ' ', sanitized, flags=re.IGNORECASE)
     sanitized = re.sub(r'\s+', ' ', sanitized).strip()
     if not sanitized:

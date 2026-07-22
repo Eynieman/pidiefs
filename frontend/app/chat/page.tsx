@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useSyncExternalStore } from "react";
 import { Send, Loader2, Trash2, Lightbulb, Square, AlertCircle, Copy, Check, Save, FolderOpen } from "lucide-react";
 import { SourceCitation } from "@/components/SourceCitation";
 import { MarkdownMessage } from "@/components/MarkdownMessage";
@@ -44,6 +44,12 @@ export default function ChatPage() {
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [showConversations, setShowConversations] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [queryMode, setQueryMode] = useState<string>("auto");
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
 
   const toggleDoc = (id: string) => {
     setSelectedDocIds((prev) => {
@@ -75,15 +81,18 @@ export default function ChatPage() {
 
   const handleSend = useCallback(async (overrideQuestion?: string) => {
     const question = (overrideQuestion ?? input).trim();
-    if (!question || loading) return;
+    if (!question || loading || !mounted) return;
 
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: question }]);
     setLoading(true);
 
-    const body: { question: string; doc_ids?: string[] } = { question };
+    const body: { question: string; doc_ids?: string[]; query_type?: string } = { question };
     if (selectedDocIds.length > 0) {
       body.doc_ids = selectedDocIds;
+    }
+    if (queryMode !== "auto") {
+      body.query_type = queryMode;
     }
 
     const controller = new AbortController();
@@ -106,9 +115,10 @@ export default function ChatPage() {
       if (!reader) throw new Error("No se pudo leer la respuesta");
 
       const decoder = new TextDecoder();
-      let sources: { content: string; source: string; page: number; score: number }[] = [];
+      let sources: { content: string; source: string; page: number; score: number; abstraction_level?: number }[] = [];
       let answer = "";
       let buffer = "";
+      let detectedQueryType = "";
 
       setMessages((prev) => [...prev, { role: "assistant", content: "", sources: [] }]);
 
@@ -129,11 +139,12 @@ export default function ChatPage() {
             const parsed = JSON.parse(data);
             if (parsed.type === "sources") {
               sources = parsed.sources;
+              detectedQueryType = parsed.query_type || "";
               setMessages((prev) => {
                 const msgs = [...prev];
                 const last = msgs[msgs.length - 1];
                 if (last.role === "assistant") {
-                  msgs[msgs.length - 1] = { ...last, sources };
+                  msgs[msgs.length - 1] = { ...last, sources, queryType: detectedQueryType || last.queryType };
                 }
                 return msgs;
               });
@@ -154,6 +165,15 @@ export default function ChatPage() {
                 const last = msgs[msgs.length - 1];
                 if (last.role === "assistant") {
                   msgs[msgs.length - 1] = { ...last, content: parsed.content, isError: true };
+                }
+                return msgs;
+              });
+            } else if (parsed.type === "followups") {
+              setMessages((prev) => {
+                const msgs = [...prev];
+                const last = msgs[msgs.length - 1];
+                if (last.role === "assistant") {
+                  msgs[msgs.length - 1] = { ...last, followups: parsed.followups };
                 }
                 return msgs;
               });
@@ -224,9 +244,9 @@ export default function ChatPage() {
       <div className="border-b border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-900">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Documentos ({selectedDocIds.length}/{documents.length})
+            Documentos ({mounted ? selectedDocIds.length : 0}/{documents.length})
           </span>
-          {messages.length > 0 && (
+          {mounted && messages.length > 0 && (
             <div className="flex gap-1">
               <button
                 onClick={handleSave}
@@ -261,7 +281,7 @@ export default function ChatPage() {
             <label className="flex cursor-pointer items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1 text-xs text-gray-600 transition hover:border-blue-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-500">
               <input
                 type="checkbox"
-                checked={selectedDocIds.length === documents.length && documents.length > 0}
+                checked={mounted ? selectedDocIds.length === documents.length && documents.length > 0 : false}
                 onChange={toggleAll}
                 className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
@@ -323,13 +343,14 @@ export default function ChatPage() {
       )}
 
       <div className="flex-1 overflow-y-auto py-6">
-        {messages.length === 0 && (
+        {(!mounted || messages.length === 0) && (
           <div className="flex h-full flex-col items-center justify-center text-center">
             <p className="text-lg font-medium text-gray-400 dark:text-gray-500">
               Haz una pregunta sobre tus documentos
             </p>
             <p className="mt-1 text-sm text-gray-300 dark:text-gray-600">
-              {selectedDocIds.length === 0
+              {!mounted ? "Cargando..."
+                : selectedDocIds.length === 0
                 ? "Selecciona documentos para buscar"
                 : selectedDocIds.length === documents.length
                   ? "Buscando en todos los documentos"
@@ -352,7 +373,7 @@ export default function ChatPage() {
         )}
 
         <div className="space-y-6">
-          {messages.map((msg, i) => (
+          {mounted && messages.map((msg, i) => (
             <div
               key={i}
               className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
@@ -379,6 +400,11 @@ export default function ChatPage() {
                   <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
                 )}
                 {msg.sources && <SourceCitation sources={msg.sources} />}
+                {msg.queryType && (
+                  <span className="mt-1 inline-block rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-400 dark:bg-gray-700 dark:text-gray-500">
+                    {msg.queryType === "global" ? "Visión global" : msg.queryType === "hybrid" ? "Híbrido" : "Local"}
+                  </span>
+                )}
                 {msg.role === "assistant" && !msg.isError && msg.content && (
                   <button
                     onClick={() => handleCopy(msg.content, i)}
@@ -390,6 +416,20 @@ export default function ChatPage() {
                       <><Copy className="h-3 w-3" /> Copiar</>
                     )}
                   </button>
+                )}
+                {msg.followups && msg.followups.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5 border-t border-gray-100 pt-3 dark:border-gray-700">
+                    {msg.followups.map((fq, fi) => (
+                      <button
+                        key={fi}
+                        onClick={() => handleSend(fq)}
+                        disabled={loading}
+                        className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] text-gray-500 transition hover:border-blue-300 hover:text-blue-600 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-400 dark:hover:border-blue-500 dark:hover:text-blue-300"
+                      >
+                        {fq}
+                      </button>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
@@ -411,6 +451,22 @@ export default function ChatPage() {
       </div>
 
       <div className="border-t border-gray-200 bg-white py-3 dark:border-gray-700 dark:bg-gray-900">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="text-xs text-gray-400 dark:text-gray-500">Modo:</span>
+          {["auto", "local", "hybrid", "global"].map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setQueryMode(mode)}
+              className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition ${
+                queryMode === mode
+                  ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
+                  : "bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700"
+              }`}
+            >
+              {mode === "auto" ? "Auto" : mode === "local" ? "Local" : mode === "hybrid" ? "Híbrido" : "Global"}
+            </button>
+          ))}
+        </div>
         <div className="flex gap-2">
           <input
             type="text"

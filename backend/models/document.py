@@ -17,6 +17,7 @@ class QueryRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50)
     doc_id: str | None = None
     doc_ids: list[str] | None = None
+    query_type: str | None = Field(default=None, pattern=r"^(local|hybrid|global|auto)?$")
 
     model_config = {"extra": "forbid"}
 
@@ -24,6 +25,7 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     sources: list[dict]
+    query_type: str | None = None
 
 
 class BatchDeleteRequest(BaseModel):

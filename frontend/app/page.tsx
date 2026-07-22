@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { FileText, BookOpen, Layers, Clock, Loader2, Upload, MessageSquare } from "lucide-react";
+import ModeInfoSection from "@/components/ModeInfoSection";
 
 interface Stats {
   total_documents: number;
@@ -111,7 +112,7 @@ export default function Home() {
       <div className="mt-12 grid gap-6 sm:grid-cols-2">
         <Link
           href="/upload"
-          className="group rounded-xl border border-gray-200 bg-white p-8 shadow-sm transition hover:shadow-md dark:border-gray-700 dark:bg-gray-800 dark:hover:shadow-lg dark:hover:shadow-gray-900/20"
+          className="group rounded-xl border-2 border-gray-300 bg-white p-8 transition hover:border-blue-400 hover:bg-blue-50 dark:border-gray-600 dark:bg-gray-800 dark:hover:border-blue-500 dark:hover:bg-blue-900/20"
         >
           <div className="flex justify-center">
             <Upload className="h-8 w-8 text-blue-500 dark:text-blue-400" />
@@ -124,7 +125,7 @@ export default function Home() {
 
         <Link
           href="/chat"
-          className="group rounded-xl border border-gray-200 bg-white p-8 shadow-sm transition hover:shadow-md dark:border-gray-700 dark:bg-gray-800 dark:hover:shadow-lg dark:hover:shadow-gray-900/20"
+          className="group rounded-xl border-2 border-gray-300 bg-white p-8 transition hover:border-blue-400 hover:bg-blue-50 dark:border-gray-600 dark:bg-gray-800 dark:hover:border-blue-500 dark:hover:bg-blue-900/20"
         >
           <div className="flex justify-center">
             <MessageSquare className="h-8 w-8 text-blue-500 dark:text-blue-400" />
@@ -135,6 +136,8 @@ export default function Home() {
           </p>
         </Link>
       </div>
+
+      <ModeInfoSection />
 
       <div className="mt-16 rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
         <h3 className="font-semibold text-gray-900 dark:text-gray-100">Stack</h3>

@@ -20,6 +20,8 @@ export interface Message {
   content: string;
   sources?: Source[];
   isError?: boolean;
+  followups?: string[];
+  queryType?: string;
 }
 
 export interface Conversation {
