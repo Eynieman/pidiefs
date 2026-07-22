@@ -162,11 +162,12 @@ export default function UploadPage() {
       </p>
 
       <div
+        onClick={() => inputRef.current?.click()}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        className={`mt-8 rounded-xl border-2 border-dashed p-10 text-center transition ${
+        className={`mt-8 cursor-pointer rounded-xl border-2 border-dashed p-10 text-center transition ${
           isDragging
             ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
             : "border-gray-300 bg-white hover:border-blue-400 dark:border-gray-600 dark:bg-gray-800 dark:hover:border-blue-500"
@@ -181,19 +182,17 @@ export default function UploadPage() {
           className="hidden"
           id="file-input"
         />
-        <label htmlFor="file-input" className="cursor-pointer">
-          <Upload className="mx-auto h-10 w-10 text-gray-400 dark:text-gray-500" />
-          <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">
-            {isDragging ? (
-              <span className="font-medium text-blue-600 dark:text-blue-400">Suelta los PDFs aqui</span>
-            ) : (
-              "Arrastra varios PDFs o click para seleccionar"
-            )}
-          </p>
-          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-            Solo archivos .pdf — Maximo 50 MB c/u
-          </p>
-        </label>
+        <Upload className="mx-auto h-10 w-10 text-gray-400 dark:text-gray-500" />
+        <p className="mt-3 text-sm text-gray-600 dark:text-gray-300">
+          {isDragging ? (
+            <span className="font-medium text-blue-600 dark:text-blue-400">Suelta los PDFs aqui</span>
+          ) : (
+            "Arrastra varios PDFs o click para seleccionar"
+          )}
+        </p>
+        <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+          Solo archivos .pdf — Maximo 50 MB c/u
+        </p>
       </div>
 
       {hasFiles && (
