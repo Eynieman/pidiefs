@@ -35,6 +35,9 @@ data/pdfs/*
 *.swo
 *~
 
+# Database runtime
+data/metadata.db
+
 # OS
 .DS_Store
 Thumbs.db
