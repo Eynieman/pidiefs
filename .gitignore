@@ -38,6 +38,9 @@ data/pdfs/*
 # Database runtime
 data/metadata.db
 
+# Logs
+data/logs/
+
 # OS
 .DS_Store
 Thumbs.db
