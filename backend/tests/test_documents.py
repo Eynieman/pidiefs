@@ -69,7 +69,8 @@ async def test_upload_then_list(client):
 
 
 async def test_delete_nonexistent(client):
-    res = await client.delete("/api/documents/nonexistent_id")
+    # Usar doc_id con formato válido pero que no existe
+    res = await client.delete("/api/documents/aaaaaaaaaaaa")
     assert res.status_code == 404
 
 

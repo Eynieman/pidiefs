@@ -1,7 +1,8 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Request, Depends
+from pydantic import BaseModel, Field
+from typing import Literal
 
 from backend.rate_limit import limiter
 from backend.database import (
@@ -13,29 +14,32 @@ from backend.database import (
     get_chat_messages,
     load_metadata,
 )
-
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 
 class CreateConversationRequest(BaseModel):
     doc_ids: list[str]
-    title: str | None = None
+    title: str | None = Field(default=None, max_length=200)
+
+    model_config = {"extra": "forbid"}
 
 
 class AddMessageRequest(BaseModel):
-    role: str
-    content: str
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=10000, min_length=1)
     sources: list[dict] | None = None
+
+    model_config = {"extra": "forbid"}
 
 
 @router.get("")
-@limiter.limit("60/minute")
+@limiter.limit("30/minute")
 async def list_conversations(request: Request):
     return get_conversations()
 
 
 @router.post("")
-@limiter.limit("30/minute")
+@limiter.limit("10/minute")
 async def create_new_conversation(request: Request, body: CreateConversationRequest):
     if body.doc_ids:
         metadata = load_metadata()
@@ -51,7 +55,7 @@ async def create_new_conversation(request: Request, body: CreateConversationRequ
 
 
 @router.get("/{conversation_id}")
-@limiter.limit("60/minute")
+@limiter.limit("20/minute")
 async def get_conversation_detail(request: Request, conversation_id: str):
     conv = get_conversation(conversation_id)
     if not conv:
@@ -61,7 +65,7 @@ async def get_conversation_detail(request: Request, conversation_id: str):
 
 
 @router.delete("/{conversation_id}")
-@limiter.limit("20/minute")
+@limiter.limit("10/minute")
 async def delete_conversation_endpoint(request: Request, conversation_id: str):
     deleted = delete_conversation(conversation_id)
     if not deleted:
@@ -70,7 +74,7 @@ async def delete_conversation_endpoint(request: Request, conversation_id: str):
 
 
 @router.post("/{conversation_id}/messages")
-@limiter.limit("60/minute")
+@limiter.limit("20/minute")
 async def add_message(request: Request, conversation_id: str, body: AddMessageRequest):
     conv = get_conversation(conversation_id)
     if not conv:
@@ -80,7 +84,7 @@ async def add_message(request: Request, conversation_id: str, body: AddMessageRe
 
 
 @router.get("/{conversation_id}/messages")
-@limiter.limit("60/minute")
+@limiter.limit("30/minute")
 async def list_messages(request: Request, conversation_id: str):
     conv = get_conversation(conversation_id)
     if not conv:

@@ -1,9 +1,9 @@
 import re
+import shutil
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.responses import Response
-from pydantic import BaseModel
 
 from backend.config import PDF_DIR, MAX_FILE_SIZE
 from backend.models.document import DocumentResponse, StatsResponse
@@ -14,16 +14,26 @@ from backend.services.duplicate_detector import compute_content_hash
 from backend.database import load_metadata, save_document, delete_document_metadata, get_document_by_hash, save_chunks, delete_chunks, get_chunks_by_doc, get_db
 from backend.services.notifications import notify_pdf_upload
 from backend.services.summarizer import generate_pdf_summary
+from backend.models.document import BatchDeleteRequest
 from backend.rate_limit import limiter
-
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 MAX_FILENAME_LENGTH = 255
+MAX_DOCUMENTS_PER_INSTANCE = 1000
+
+
+DOC_ID_PATTERN = re.compile(r"^[a-f0-9]{12}$")
+
+
+def _validate_doc_id(doc_id: str) -> None:
+    if not DOC_ID_PATTERN.match(doc_id):
+        raise HTTPException(status_code=400, detail="ID de documento inválido")
 
 
 def _sanitize_filename(filename: str) -> str:
     safe = re.sub(r"[^\w\-.]", "_", filename)
-    return safe[:MAX_FILENAME_LENGTH]
+    safe = safe.lstrip("._-")
+    return safe[:MAX_FILENAME_LENGTH] or "_"
 
 
 def _generate_and_save_summary(doc_id: str, filename: str, content: str):
@@ -36,9 +46,17 @@ def _generate_and_save_summary(doc_id: str, filename: str, content: str):
 
 @router.post("", response_model=DocumentResponse)
 @limiter.limit("10/minute")
-async def upload_document(request: Request, file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
-    if not file.filename.endswith(".pdf"):
+async def upload_document(
+    request: Request,
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None,
+):
+    if not file.filename or not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos PDF")
+
+    content_type = file.content_type or ""
+    if content_type and content_type not in ("application/pdf", "application/octet-stream", ""):
+        raise HTTPException(status_code=400, detail="Tipo MIME del archivo no válido")
 
     content = await file.read()
 
@@ -54,6 +72,13 @@ async def upload_document(request: Request, file: UploadFile = File(...), backgr
     if not content[:5] == b"%PDF-":
         raise HTTPException(status_code=400, detail="El archivo no es un PDF válido")
 
+    metadata = load_metadata()
+    if len(metadata) >= MAX_DOCUMENTS_PER_INSTANCE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Límite de {MAX_DOCUMENTS_PER_INSTANCE} documentos alcanzado",
+        )
+
     content_hash = compute_content_hash(content)
 
     existing = get_document_by_hash(content_hash)
@@ -65,6 +90,15 @@ async def upload_document(request: Request, file: UploadFile = File(...), backgr
             chunks=existing["chunks"],
             uploaded_at=existing["uploaded_at"],
             duplicate_of=existing["id"],
+        )
+
+    # Verificar espacio disponible en disco
+    MIN_FREE_SPACE = 500 * 1024 * 1024  # 500 MB
+    disk_usage = shutil.disk_usage(PDF_DIR)
+    if disk_usage.free < MIN_FREE_SPACE:
+        raise HTTPException(
+            status_code=413,
+            detail="Espacio en disco insuficiente para almacenar el archivo",
         )
 
     doc_id = uuid.uuid4().hex[:12]
@@ -138,14 +172,14 @@ async def upload_document(request: Request, file: UploadFile = File(...), backgr
 
 
 @router.get("", response_model=list[DocumentResponse])
-@limiter.limit("60/minute")
+@limiter.limit("30/minute")
 async def list_documents(request: Request):
     metadata = load_metadata()
     return [DocumentResponse(**doc) for doc in metadata.values()]
 
 
 @router.get("/stats", response_model=StatsResponse)
-@limiter.limit("60/minute")
+@limiter.limit("30/minute")
 async def get_stats(request: Request):
     metadata = load_metadata()
     if not metadata:
@@ -175,10 +209,6 @@ async def get_stats(request: Request):
     )
 
 
-class BatchDeleteRequest(BaseModel):
-    doc_ids: list[str]
-
-
 @router.delete("/batch")
 @limiter.limit("5/minute")
 async def batch_delete_documents(request: Request, body: BatchDeleteRequest):
@@ -187,6 +217,7 @@ async def batch_delete_documents(request: Request, body: BatchDeleteRequest):
     total_chunks_deleted = 0
 
     for doc_id in body.doc_ids:
+        _validate_doc_id(doc_id)
         if doc_id not in metadata:
             continue
 
@@ -205,8 +236,9 @@ async def batch_delete_documents(request: Request, body: BatchDeleteRequest):
 
 
 @router.delete("/{doc_id}")
-@limiter.limit("20/minute")
+@limiter.limit("10/minute")
 async def remove_document(request: Request, doc_id: str):
+    _validate_doc_id(doc_id)
     metadata = load_metadata()
     if doc_id not in metadata:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
@@ -224,8 +256,9 @@ async def remove_document(request: Request, doc_id: str):
 
 
 @router.get("/{doc_id}/chunks")
-@limiter.limit("60/minute")
+@limiter.limit("20/minute")
 async def get_document_chunks(request: Request, doc_id: str):
+    _validate_doc_id(doc_id)
     metadata = load_metadata()
     if doc_id not in metadata:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
@@ -247,8 +280,9 @@ async def get_document_chunks(request: Request, doc_id: str):
 
 
 @router.get("/{doc_id}/thumbnail")
-@limiter.limit("60/minute")
+@limiter.limit("20/minute")
 async def get_document_thumbnail(request: Request, doc_id: str):
+    _validate_doc_id(doc_id)
     metadata = load_metadata()
     if doc_id not in metadata:
         raise HTTPException(status_code=404, detail="Documento no encontrado")

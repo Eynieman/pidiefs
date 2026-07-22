@@ -1,6 +1,12 @@
+import logging
 import groq
 from fastapi import HTTPException
 from backend.config import GROQ_API_KEY, GROQ_MODEL
+from backend.services.guardrails import validate_llm_output, contains_jailbreak
+
+logger = logging.getLogger(__name__)
+
+UNSAFE_RESPONSE = "No puedo generar esa respuesta."
 
 _client = None
 
@@ -13,6 +19,15 @@ def get_client() -> groq.Groq:
 
 
 def _build_messages(question: str, context_docs: list[dict]) -> list[dict]:
+    # Verificar indirect prompt injection en documentos recuperados
+    for doc in context_docs:
+        content = doc.get("content", "")
+        if contains_jailbreak(content):
+            source = doc["metadata"].get("source", "desconocido")
+            logger.warning("Jailbreak detectado en documento: %s", source)
+            # Filtrar este documento del contexto
+            context_docs = [d for d in context_docs if d.get("content") != content]
+
     context = "\n\n---\n\n".join(
         f"[Fuente: {doc['metadata'].get('source', 'desconocido')}, "
         f"Página {doc['metadata'].get('page', '?')}]\n{doc['content']}"
@@ -53,7 +68,15 @@ def generate_answer(question: str, context_docs: list[dict]) -> str:
             temperature=0.3,
             max_tokens=2048,
         )
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+
+        # Output guardrails
+        result = validate_llm_output(content)
+        if not result["safe"]:
+            logger.warning("Output guardrails bloqueado: %s", result["reasons"])
+            return UNSAFE_RESPONSE
+
+        return content
     except groq.RateLimitError:
         raise HTTPException(status_code=429, detail="Límite de solicitudes alcanzado. Intenta más tarde.")
     except groq.AuthenticationError:
@@ -75,9 +98,28 @@ def generate_answer_stream(question: str, context_docs: list[dict]):
             stream=True,
         )
 
+        buffer = ""
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+                token = chunk.choices[0].delta.content
+                buffer += token
+
+                # Evaluar cada 50 caracteres para no penalizar performance
+                if len(buffer) >= 50:
+                    result = validate_llm_output(buffer)
+                    if not result["safe"]:
+                        logger.warning("Streaming output guardrails bloqueado: %s", result["reasons"])
+                        yield UNSAFE_RESPONSE
+                        return
+                    buffer = ""
+
+        # Evaluar resto del buffer
+        if buffer:
+            result = validate_llm_output(buffer)
+            if not result["safe"]:
+                logger.warning("Streaming output guardrails (final) bloqueado: %s", result["reasons"])
+                yield UNSAFE_RESPONSE
+                return
     except groq.RateLimitError:
         raise
     except groq.AuthenticationError:

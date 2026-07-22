@@ -1,26 +1,68 @@
 import json
+import re
 
 import groq
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+import logging
+
 from backend.models.document import QueryRequest, QueryResponse
 from backend.services.embeddings import embed_query
 from backend.services.vector_store import query_similar, get_document_count
 from backend.services.llm import generate_answer, generate_answer_stream
+from backend.services.guardrails import validate_llm_input
 from backend.config import TOP_K_RESULTS, GROQ_API_KEY
 from backend.rate_limit import limiter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["query"])
 
 MAX_QUESTION_LENGTH = 2000
+DOC_ID_PATTERN = re.compile(r"^[a-f0-9]{12}$")
 
 
 def _validate_query_request(query_request: QueryRequest) -> None:
-    if len(query_request.question) > MAX_QUESTION_LENGTH:
+    question = query_request.question.strip()
+    query_request.question = question
+
+    if not question:
+        raise HTTPException(
+            status_code=400,
+            detail="La pregunta no puede estar vacía",
+        )
+
+    if len(question) > MAX_QUESTION_LENGTH:
         raise HTTPException(
             status_code=400,
             detail=f"La pregunta excede el límite de {MAX_QUESTION_LENGTH} caracteres",
+        )
+
+    if any(ord(c) < 0x20 and c not in ("\n", "\t", "\r") for c in question):
+        raise HTTPException(
+            status_code=400,
+            detail="La pregunta contiene caracteres de control no permitidos",
+        )
+
+    if query_request.doc_id and not DOC_ID_PATTERN.match(query_request.doc_id):
+        raise HTTPException(
+            status_code=400,
+            detail="ID de documento inválido",
+        )
+
+    if query_request.doc_ids:
+        for did in query_request.doc_ids:
+            if not DOC_ID_PATTERN.match(did):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"ID de documento inválido: {did}",
+                )
+
+    if question in ("", "...", "?"):
+        raise HTTPException(
+            status_code=400,
+            detail="Pregunta inválida",
         )
 
     if not GROQ_API_KEY:
@@ -28,6 +70,19 @@ def _validate_query_request(query_request: QueryRequest) -> None:
             status_code=500,
             detail="GROQ_API_KEY no configurada. Obtén una gratis en https://console.groq.com",
         )
+
+    # Input guardrails
+    input_result = validate_llm_input(question)
+    if not input_result["safe"]:
+        if input_result.get("has_pii"):
+            logger.warning("PII detectado en pregunta (aceptada): %s", question[:100])
+        else:
+            jailbreak_reasons = [r for r in input_result["reasons"] if r != "pii_detected"]
+            if jailbreak_reasons:
+                raise HTTPException(
+                    status_code=400,
+                    detail="La pregunta contiene contenido no permitido",
+                )
 
     doc_count = get_document_count()
     if doc_count == 0:
@@ -50,7 +105,7 @@ def _build_sources(similar_docs: list[dict]) -> list[dict]:
 
 
 @router.post("/query", response_model=QueryResponse)
-@limiter.limit("30/minute")
+@limiter.limit("10/minute")
 async def query_knowledge_base(request: Request, query_request: QueryRequest):
     _validate_query_request(query_request)
 
@@ -86,7 +141,7 @@ async def query_knowledge_base(request: Request, query_request: QueryRequest):
 
 
 @router.post("/query/stream")
-@limiter.limit("30/minute")
+@limiter.limit("5/minute")
 async def query_knowledge_base_stream(request: Request, query_request: QueryRequest):
     _validate_query_request(query_request)
 

@@ -6,6 +6,9 @@ load_dotenv(Path(__file__).parent / ".env")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
+
+import time
+APP_START_TIME = time.time()
 PDF_DIR = DATA_DIR / "pdfs"
 CHROMA_DIR = DATA_DIR / "chroma"
 
