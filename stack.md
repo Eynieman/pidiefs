@@ -71,7 +71,13 @@ Arquitectura de una aplicación web para consultar PDFs mediante un pipeline de 
 | **Chat Export**   | jspdf (PDF) + Markdown            | Exportar conversaciones en múltiples formatos       |
 | **Rate Limiting** | slowapi                           | Protección contra abuso de API                      |
 | **OCR**           | pytesseract + Tesseract           | Extracción de texto de PDFs escaneados              |
-| **Testing**       | Vitest + pytest                   | Tests unitarios frontend y backend                  |
+| **Middleware**     | Next.js Middleware                | CSP, nonces, seguridad de headers                   |
+| **CSRF**          | starlette-csrf                    | Protección contra Cross-Site Request Forgery        |
+| **Audit Logging** | Custom middleware                 | Registro de requests/responses                      |
+| **Output Guardrails** | Custom                        | Detección de toxicidad, PII, leakage en respuestas LLM |
+| **Input Guardrails**  | Custom                        | Detección de jailbreak prompts                      |
+| **Monitoring**    | Custom + psutil                   | Métricas de uso, salud del sistema                  |
+| **Testing**       | Vitest + pytest                   | Tests unitarios e integración (55 backend, 40 frontend) |
 | **Dev Scripts**   | concurrently                      | Arranca backend + frontend con un solo comando      |
 
 ---
@@ -116,8 +122,9 @@ Arquitectura de una aplicación web para consultar PDFs mediante un pipeline de 
 
 ### 5.1 Ingesta de PDFs
 ```
-PDF Upload (max 50 MB) → Validación magic bytes %PDF + tamaño + extensión
+PDF Upload (max 50 MB) → Validación Content-Type + body size + magic bytes %PDF + extensión
     → Detección de duplicados (MD5 hash)
+    → Doc ID traversal check
     → Extracción texto (PyPDF/pdfplumber)
     → Chunking (LangChain, 500 chars, 50 overlap)
     → Embeddings (Sentence Transformers, local)
@@ -143,6 +150,7 @@ User Query → Embedding de la query (local)
 ```
 pageyn/
 ├── frontend/                  # Next.js App
+│   ├── middleware.ts          # CSP + nonces, seguridad de headers
 │   ├── app/
 │   │   ├── layout.tsx         # Layout raíz con nav + dark mode
 │   │   ├── page.tsx           # Dashboard principal (stats)
@@ -164,12 +172,13 @@ pageyn/
 │   ├── components/
 │   │   ├── BatchActionBar.tsx # Barra de acciones para batch delete
 │   │   ├── ChatExportMenu.tsx # Menú exportar chat (Markdown + PDF)
+│   │   ├── ClientLayout.tsx   # Layout cliente con providers
 │   │   ├── DocumentCard.tsx   # Card con thumbnail + checkbox selection
 │   │   ├── EmptyState.tsx     # Estado vacío genérico
 │   │   ├── ErrorFallback.tsx  # Fallback de error boundaries
 │   │   ├── LoadingSpinner.tsx # Spinner de carga
-│   │   ├── MarkdownMessage.tsx# Rendering markdown
-│   │   ├── NavLinks.tsx       # Navegación responsive (hamburger)
+│   │   ├── MarkdownMessage.tsx# Rendering markdown con sanitización
+│   │   ├── NavLinks.tsx       # Navegación responsive (sin login/logout)
 │   │   ├── SourceCitation.tsx # Fuentes de respuestas
 │   │   ├── StatusCard.tsx     # Cards de éxito/error
 │   │   └── ThemeToggle.tsx    # Toggle dark/light mode
@@ -185,7 +194,10 @@ pageyn/
 │   │   ├── EmptyState.test.tsx
 │   │   ├── StatusCard.test.tsx
 │   │   ├── LoadingSpinner.test.tsx
-│   │   └── MarkdownMessage.test.tsx
+│   │   ├── MarkdownMessage.test.tsx
+│   │   └── security.test.tsx # Seguridad: XSS, integridad de componentes
+│   ├── types/
+│   │   └── rehype-sanitize.d.ts # Tipos para rehype-sanitize
 │   ├── vitest.config.ts       # Config Vitest
 │   ├── setupTests.ts          # Setup testing-library
 │   └── package.json
@@ -195,10 +207,15 @@ pageyn/
 │   ├── config.py              # Configuración (incluye OCR_ENABLED, OCR_LANGUAGE)
 │   ├── database.py            # SQLite metadata store + FTS5 + conversations
 │   ├── rate_limit.py          # Rate limiting (slowapi)
+│   ├── middleware/
+│   │   ├── __init__.py
+│   │   ├── audit.py           # Audit logging de requests/responses
+│   │   └── monitoring.py      # Métricas y salud del sistema
 │   ├── routers/
 │   │   ├── documents.py       # CRUD documentos + batch delete + thumbnails
 │   │   ├── query.py           # Endpoint de consulta + streaming
-│   │   └── conversations.py   # CRUD conversaciones chat
+│   │   ├── conversations.py   # CRUD conversaciones chat
+│   │   └── admin.py           # Metrics y health endpoints
 │   ├── services/
 │   │   ├── pdf_extractor.py   # Extracción de texto + OCR fallback
 │   │   ├── text_splitter.py   # Chunking
@@ -207,7 +224,8 @@ pageyn/
 │   │   ├── llm.py             # Integración Groq API
 │   │   ├── summarizer.py      # Auto-summary de PDFs (Groq)
 │   │   ├── notifications.py   # WhatsApp notifications (Twilio)
-│   │   └── duplicate_detector.py # Detección de duplicados (MD5)
+│   │   ├── duplicate_detector.py # Detección de duplicados (MD5)
+│   │   └── guardrails.py      # Input/output guardrails (toxic, PII, jailbreak)
 │   ├── models/
 │   │   └── document.py        # Modelos Pydantic (incluye summary)
 │   ├── tests/                 # Tests backend (pytest)
@@ -219,17 +237,21 @@ pageyn/
 │   │   ├── test_embeddings.py
 │   │   ├── test_pdf_extractor.py
 │   │   ├── test_text_splitter.py
-│   │   └── test_vector_store.py
+│   │   ├── test_vector_store.py
+│   │   └── test_security.py   # Seguridad: guardrails, CSRF, sanitización
 │   ├── pytest.ini             # Config pytest
 │   └── requirements.txt
 │
 ├── data/
 │   ├── chroma/                # ChromaDB persistente
 │   ├── metadata.db            # SQLite metadata + FTS5
-│   └── pdfs/                  # PDFs originales
+│   ├── pdfs/                  # PDFs originales
+│   └── logs/                  # Audit logs
+│       └── api.log
 │
 ├── .env.local.example         # Template de variables de entorno
 ├── package.json               # Scripts de ejecución (raíz)
+├── SECURITY.md                # Políticas de seguridad
 ├── stack.md                   # Este archivo
 └── README.md
 ```
@@ -271,6 +293,8 @@ pydantic==2.13.4
 aiosqlite==0.22.1
 python-dotenv==1.0.1
 slowapi==0.1.10
+starlette-csrf==2.6.0
+psutil==7.0.0
 pytest==8.3.4
 pytest-asyncio==0.25.0
 httpx==0.28.1
@@ -336,6 +360,8 @@ Pillow>=10.0.0
 | `POST`  | `/api/query`              | Consultar la knowledge base                    |
 | `POST`  | `/api/query/stream`       | Consulta con streaming (SSE)                   |
 | `GET`   | `/api/health`             | Verificar estado de servicios                  |
+| `GET`   | `/api/admin/metrics`      | Métricas de uso del sistema                    |
+| `GET`   | `/api/admin/health`       | Health check con uso de recursos               |
 | `GET`   | `/api/conversations`      | Listar conversaciones guardadas                |
 | `POST`  | `/api/conversations`      | Guardar conversación                           |
 | `GET`   | `/api/conversations/{id}` | Obtener conversación con mensajes              |
@@ -412,6 +438,16 @@ NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
 24. **Batch delete**: Eliminar múltiples documentos de una vez con selección múltiple
 25. **Rate limiting activo**: slowapi protege todos los endpoints contra abuso
 26. **Chat export PDF**: Generación de PDFs profesionales con jspdf para compartir conversaciones
+27. **CSP con nonces dinámicos**: Middleware de Next.js genera nonces por request para evitar XSS
+28. **CSRF con Double Submit Cookie**: Protección contra Cross-Site Request Forgery vía starlette-csrf
+29. **Audit logging de todas las requests**: Middleware personalizado registra método, ruta, status, duración
+30. **Output guardrails**: Detección de toxicidad, PII y leakage en respuestas del LLM antes de enviarlas al cliente
+31. **Input guardrails**: Detección de jailbreak prompts antes de procesar consultas del usuario
+32. **Protección contra path traversal**: Validación de doc_ids para prevenir acceso no autorizado a documentos
+33. **Storage quota y body size limits**: Límite de almacenamiento por documento (50 MB) y cuota total
+34. **Validación de Content-Type**: Rechazo de archivos con tipo MIME incorrecto antes de procesarlos
+35. **Trusted Host middleware**: Solo permite requests con Host autorizados para evitar host header injection
+36. **Monitoreo de salud del sistema**: Endpoints /admin/metrics y /admin/health con métricas de CPU, memoria y uso
 
 ---
 
@@ -475,12 +511,24 @@ cd backend && python3 -m pytest backend/tests/ -v  # tests backend (pytest)
 | File size | 50 MB máximo |
 | Duplicados | MD5 hash, evita re-indexación |
 | BM25 sanitization | Limpieza de operadores FTS5 (AND, OR, NOT, NEAR, etc.) |
+| CSP (Content Security Policy) | Nonces dinámicos via middleware de Next.js |
+| CSRF | Double Submit Cookie con starlette-csrf |
+| Trusted Host | Middleware que solo permite hosts autorizados |
+| Audit logging | Middleware personalizado registra todas las requests |
+| Output guardrails | Detección de toxicidad, PII y leakage en respuestas LLM |
+| Input guardrails | Detección de jailbreak prompts en consultas de usuario |
+| Storage quota | Límite de almacenamiento total configurable |
+| Doc ID traversal check | Validación de doc_ids contra path traversal |
+| Content-Type validation | Rechazo de archivos con tipo MIME incorrecto |
+| Body size limit | Límite de tamaño de cuerpo de request |
+| XSS prevention | Sanitización de markdown con rehype-sanitize |
+| Pydantic extra="forbid" | Rechazo de campos adicionales en modelos de request |
 
 ---
 
 ## 14. Testing
 
-### Backend (38 tests)
+### Backend (55 tests)
 | Suite | Tests |
 |-------|-------|
 | test_documents.py | 10 |
@@ -491,8 +539,9 @@ cd backend && python3 -m pytest backend/tests/ -v  # tests backend (pytest)
 | test_text_splitter.py | 3 |
 | test_vector_store.py | 3 |
 | test_notifications.py | 5 |
+| test_security.py | 17 |
 
-### Frontend (31 tests)
+### Frontend (40 tests)
 | Suite | Tests |
 |-------|-------|
 | useChatPersistence.test.ts | 11 |
@@ -503,3 +552,4 @@ cd backend && python3 -m pytest backend/tests/ -v  # tests backend (pytest)
 | StatusCard.test.tsx | 2 |
 | LoadingSpinner.test.tsx | 2 |
 | MarkdownMessage.test.tsx | 3 |
+| security.test.tsx | 9 |
