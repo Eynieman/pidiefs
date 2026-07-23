@@ -1,13 +1,12 @@
 import os
 import sys
-from twilio.rest import Client
+import urllib.request
+import urllib.parse
 
 
 def send_whatsapp_notification():
-    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
-    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+    api_key = os.environ.get("CALLMEBOT_API_KEY")
     to_number = os.environ.get("WHATSAPP_TO_NUMBER")
-    from_number = "whatsapp:+14155238886"
 
     commit_author = os.environ.get("COMMIT_AUTHOR", "Desconocido")
     commit_message = os.environ.get("COMMIT_MESSAGE", "Sin mensaje")
@@ -16,42 +15,49 @@ def send_whatsapp_notification():
     changed_files = os.environ.get("CHANGED_FILES", "")
     event_type = os.environ.get("EVENT_TYPE", "push")
 
-    if not all([account_sid, auth_token, to_number]):
-        print("Error: Faltan variables de entorno TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN o WHATSAPP_TO_NUMBER")
+    if not all([api_key, to_number]):
+        print("Error: Faltan CALLMEBOT_API_KEY o WHATSAPP_TO_NUMBER")
         sys.exit(1)
 
     if event_type == "pull_request":
-        header = f"🔀 Pull Request en pidiefs"
+        header = "\U0001f500 Pull Request en pageyn"
     else:
-        header = f"📬 Push en pidiefs"
+        header = "\U0001f4e6 Push a pageyn"
 
     lines = [
         header,
-        "",
-        f"👤 Autor: {commit_author}",
-        f"📝 Mensaje: {commit_message}",
-        f"🌿 Branch: {branch}",
+        f"\U0001f464 {commit_author}",
+        f"\U0001f4dd \"{commit_message}\"",
+        f"\U0001f33f {branch}",
     ]
 
     if changed_files:
         file_list = [f.strip() for f in changed_files.split(",") if f.strip()]
-        lines.append(f"📂 Archivos modificados ({len(file_list)}):")
+        lines.append(f"\U0001f4c2 Archivos ({len(file_list)}):")
         for f in file_list:
-            lines.append(f"  • {f}")
+            lines.append(f"  \u2022 {f}")
 
     if commit_url:
-        lines.append(f"🔗 {commit_url}")
+        lines.append(f"\U0001f517 {commit_url}")
 
     message_body = "\n".join(lines)
 
-    client = Client(account_sid, auth_token)
-    message = client.messages.create(
-        body=message_body,
-        from_=from_number,
-        to=f"whatsapp:{to_number}",
+    url = "https://api.callmebot.com/whatsapp.php"
+    params = urllib.parse.urlencode(
+        {"phone": to_number, "text": message_body, "apikey": api_key},
+        doseq=True,
     )
+    full_url = f"{url}?{params}"
 
-    print(f"Mensaje enviado. SID: {message.sid}")
+    try:
+        resp = urllib.request.urlopen(full_url, timeout=10)
+        print(f"Mensaje enviado. Status: {resp.status}")
+    except urllib.error.HTTPError as e:
+        print(f"Error HTTP: {e.code} - {e.read().decode()}")
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"Error de conexion: {e.reason}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
