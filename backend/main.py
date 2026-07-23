@@ -15,7 +15,7 @@ from starlette_csrf import CSRFMiddleware
 from backend.rate_limit import limiter
 from backend.middleware.audit import AuditMiddleware
 from backend.middleware.monitoring import admin_router
-from backend.routers import documents, query, conversations, webhooks
+from backend.routers import documents, query, conversations
 from backend.services.embeddings import preload_model
 
 
@@ -117,7 +117,6 @@ app.include_router(admin_router)
 app.include_router(documents.router)
 app.include_router(query.router)
 app.include_router(conversations.router)
-app.include_router(webhooks.router)
 
 
 @app.get("/")
