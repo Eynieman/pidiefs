@@ -1,6 +1,10 @@
 import asyncio
+import logging
 from sentence_transformers import SentenceTransformer
 from backend.config import EMBEDDING_MODEL
+from backend.services.cache import query_embedding_cache, make_embedding_key
+
+logger = logging.getLogger(__name__)
 
 _model = None
 
@@ -25,6 +29,13 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 async def embed_query(query: str) -> list[float]:
+    key = make_embedding_key(query)
+    cached = query_embedding_cache.get(key)
+    if cached is not None:
+        logger.info("Cache hit for embed_query: %s", query[:50])
+        return cached
     model = get_model()
     embedding = await asyncio.to_thread(model.encode, [query], show_progress_bar=False)
-    return embedding[0].tolist()
+    result = embedding[0].tolist()
+    query_embedding_cache[key] = result
+    return result

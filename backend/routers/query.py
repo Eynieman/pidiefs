@@ -25,8 +25,7 @@ router = APIRouter(prefix="/api", tags=["query"])
 MAX_QUESTION_LENGTH = 2000
 DOC_ID_PATTERN = re.compile(r"^[a-f0-9]{12}$")
 
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+CALLMEBOT_API_KEY = os.getenv("CALLMEBOT_API_KEY", "")
 WHATSAPP_TO_NUMBER = os.getenv("WHATSAPP_TO_NUMBER", "")
 
 
@@ -261,31 +260,30 @@ async def health_check(request: Request):
 @router.get("/health/whatsapp")
 @limiter.limit("10/minute")
 async def whatsapp_health(request: Request):
-    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, WHATSAPP_TO_NUMBER]):
+    if not all([CALLMEBOT_API_KEY, WHATSAPP_TO_NUMBER]):
         return {
             "configured": False,
-            "error": "Faltan credenciales de Twilio en .env",
+            "error": "Falta CALLMEBOT_API_KEY o WHATSAPP_TO_NUMBER en .env",
         }
 
     try:
-        url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
-        data = {
-            "Body": "🧪 Prueba de notificación desde pidiefs",
-            "From": "whatsapp:+14155238886",
-            "To": f"whatsapp:{WHATSAPP_TO_NUMBER}",
+        url = "https://api.callmebot.com/whatsapp.php"
+        params = {
+            "phone": WHATSAPP_TO_NUMBER,
+            "text": "🧪 Prueba de notificación desde pageyn",
+            "apikey": CALLMEBOT_API_KEY,
         }
-        response = httpx.post(url, data=data, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=10)
+        response = httpx.get(url, params=params, timeout=10)
         response.raise_for_status()
         return {
             "configured": True,
             "working": True,
-            "message_sid": response.json().get("sid"),
         }
     except httpx.HTTPStatusError as e:
         return {
             "configured": True,
             "working": False,
-            "error": f"Twilio API error {e.response.status_code}: {e.response.text}",
+            "error": f"CallMeBot API error {e.response.status_code}: {e.response.text}",
         }
     except Exception as e:
         return {

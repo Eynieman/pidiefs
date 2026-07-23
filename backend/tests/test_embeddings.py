@@ -27,3 +27,13 @@ async def test_embed_query_returns_vector():
     result = await embed_query("test query")
     assert isinstance(result, list)
     assert len(result) == 384
+
+
+@pytest.mark.asyncio
+async def test_embed_query_cache():
+    from backend.services.cache import query_embedding_cache
+
+    query_embedding_cache.clear()
+    first = await embed_query("cache test query")
+    second = await embed_query("cache test query")
+    assert first == second

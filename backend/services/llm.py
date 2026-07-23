@@ -4,6 +4,7 @@ import groq
 from fastapi import HTTPException
 from backend.config import GROQ_API_KEY, GROQ_MODEL
 from backend.services.guardrails import validate_llm_output, contains_jailbreak
+from backend.services.cache import llm_answer_cache, followup_cache, make_llm_key, make_followup_key
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,12 @@ def _build_messages(question: str, context_docs: list[dict], query_type: str = "
 
 
 def generate_answer(question: str, context_docs: list[dict], query_type: str = "local") -> str:
+    key = make_llm_key(question, context_docs, query_type)
+    cached = llm_answer_cache.get(key)
+    if cached is not None:
+        logger.info("Cache hit for generate_answer")
+        return cached
+
     client = get_client()
     messages = _build_messages(question, context_docs, query_type)
 
@@ -110,6 +117,7 @@ def generate_answer(question: str, context_docs: list[dict], query_type: str = "
             logger.warning("Output guardrails bloqueado: %s", result["reasons"])
             return UNSAFE_RESPONSE
 
+        llm_answer_cache[key] = content
         return content
     except groq.RateLimitError:
         raise HTTPException(status_code=429, detail="Limite de solicitudes alcanzado. Intenta mas tarde.")
@@ -173,6 +181,11 @@ FOLLOWUP_PROMPT = (
 def generate_followups(question: str, answer: str) -> list[str]:
     if not answer or not question:
         return []
+    key = make_followup_key(question, answer)
+    cached = followup_cache.get(key)
+    if cached is not None:
+        logger.info("Cache hit for generate_followups")
+        return cached
     client = get_client()
     try:
         response = client.chat.completions.create(
@@ -187,7 +200,9 @@ def generate_followups(question: str, answer: str) -> list[str]:
         )
         data = json.loads(response.choices[0].message.content)
         preguntas = data.get("preguntas", [])
-        return preguntas[:3]
+        result = preguntas[:3]
+        followup_cache[key] = result
+        return result
     except Exception as e:
         logger.warning("Failed to generate followups: %s", e)
         return []

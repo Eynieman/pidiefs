@@ -2,6 +2,7 @@ import logging
 
 from backend.config import GROQ_API_KEY, GROQ_MODEL, SUMMARY_GLOBAL_SAMPLE_CHARS, SUMMARY_MAX_SECTIONS
 from backend.services.llm import get_client
+from backend.services.cache import pdf_summary_cache, make_summary_key
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,11 @@ def _call_groq(prompt: str, max_tokens: int = 300) -> str:
 
 
 def generate_pdf_summary(filename: str, content: str) -> str:
+    key = make_summary_key(filename, content)
+    cached = pdf_summary_cache.get(key)
+    if cached is not None:
+        logger.info("Cache hit for generate_pdf_summary: %s", filename)
+        return cached
     truncated = content[:3000]
     prompt = (
         "Eres un asistente de documentacion. "
@@ -32,7 +38,9 @@ def generate_pdf_summary(filename: str, content: str) -> str:
         f"Documento: {filename}\n"
         f"Contenido (primeras paginas):\n{truncated}"
     )
-    return _call_groq(prompt, max_tokens=300)
+    result = _call_groq(prompt, max_tokens=300)
+    pdf_summary_cache[key] = result
+    return result
 
 
 def summarize_cluster(texts: list[str], cluster_id: int) -> dict:
