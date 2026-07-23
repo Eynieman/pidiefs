@@ -42,6 +42,15 @@ def notify_pdf_upload(filename: str, pages: int, chunks: int, doc_id: str):
     _send_whatsapp(message, filename)
 
 
+def notify_pdf_deleted(filename: str, doc_id: str):
+    message = (
+        f"\U0001f5d1 PDF eliminado de pageyn\n"
+        f"\U0001f4c1 Archivo: {filename}\n"
+        f"\U0001f194 ID: {doc_id}"
+    )
+    _send_whatsapp(message, filename)
+
+
 def notify_github_push(repo: str, branch: str, author: str,
                        commits: list[dict], compare_url: str):
     first_msg = commits[0]["message"].split("\n")[0] if commits else ""

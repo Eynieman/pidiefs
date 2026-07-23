@@ -13,7 +13,7 @@ from backend.services.text_splitter import split_pages
 from backend.services.vector_store import add_documents, add_summary_documents, delete_document, get_document_count
 from backend.services.duplicate_detector import compute_content_hash
 from backend.database import load_metadata, save_document, delete_document_metadata, get_document_by_hash, save_chunks, delete_chunks, get_chunks_by_doc, get_db
-from backend.services.notifications import notify_pdf_upload
+from backend.services.notifications import notify_pdf_upload, notify_pdf_deleted
 from backend.services.summarizer import generate_pdf_summary, summarize_cluster, generate_global_summary_enhanced
 from backend.models.document import BatchDeleteRequest
 from backend.rate_limit import limiter
@@ -292,7 +292,7 @@ async def get_stats(request: Request):
 
 @router.delete("/batch")
 @limiter.limit("5/minute")
-async def batch_delete_documents(request: Request, body: BatchDeleteRequest):
+async def batch_delete_documents(request: Request, body: BatchDeleteRequest, background_tasks: BackgroundTasks):
     metadata = load_metadata()
     deleted_count = 0
     total_chunks_deleted = 0
@@ -302,6 +302,7 @@ async def batch_delete_documents(request: Request, body: BatchDeleteRequest):
         if doc_id not in metadata:
             continue
 
+        filename = metadata[doc_id]["filename"]
         deleted = delete_document(doc_id)
         total_chunks_deleted += deleted
 
@@ -313,17 +314,20 @@ async def batch_delete_documents(request: Request, body: BatchDeleteRequest):
         delete_document_metadata(doc_id)
         deleted_count += 1
 
+        background_tasks.add_task(notify_pdf_deleted, filename=filename, doc_id=doc_id)
+
     return {"deleted_documents": deleted_count, "deleted_chunks": total_chunks_deleted}
 
 
 @router.delete("/{doc_id}")
 @limiter.limit("10/minute")
-async def remove_document(request: Request, doc_id: str):
+async def remove_document(request: Request, doc_id: str, background_tasks: BackgroundTasks):
     _validate_doc_id(doc_id)
     metadata = load_metadata()
     if doc_id not in metadata:
         raise HTTPException(status_code=404, detail="Documento no encontrado")
 
+    filename = metadata[doc_id]["filename"]
     deleted = delete_document(doc_id)
 
     pdf_files = list(PDF_DIR.glob(f"{doc_id}_*"))
@@ -332,6 +336,8 @@ async def remove_document(request: Request, doc_id: str):
 
     delete_chunks(doc_id)
     delete_document_metadata(doc_id)
+
+    background_tasks.add_task(notify_pdf_deleted, filename=filename, doc_id=doc_id)
 
     return {"deleted_chunks": deleted}
 

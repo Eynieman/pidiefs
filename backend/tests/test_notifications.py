@@ -1,6 +1,6 @@
 import httpx
 from unittest.mock import patch, MagicMock
-from backend.services.notifications import notify_pdf_upload, notify_github_push
+from backend.services.notifications import notify_pdf_upload, notify_pdf_deleted, notify_github_push
 
 
 class TestNotifyPdfUpload:
@@ -135,3 +135,61 @@ class TestNotifyGithubPush:
         text = mock_get.call_args[1]["params"]["text"]
         assert "feat: add feature" in text
         assert "(+2 mas)" in text
+
+
+class TestNotifyPdfDeleted:
+    @patch("backend.services.notifications.CALLMEBOT_API_KEY", "")
+    @patch("backend.services.notifications.WHATSAPP_TO_NUMBER", "")
+    @patch("backend.services.notifications.logger")
+    def test_skips_when_credentials_missing(self, mock_logger, *_):
+        notify_pdf_deleted("deleted.pdf", "doc999")
+        mock_logger.warning.assert_called_once_with(
+            "CallMeBot not configured, skipping WhatsApp notification"
+        )
+
+    @patch("backend.services.notifications.httpx.get")
+    @patch("backend.services.notifications.CALLMEBOT_API_KEY", "apikey123")
+    @patch("backend.services.notifications.WHATSAPP_TO_NUMBER", "+5491112345678")
+    @patch("backend.services.notifications.logger")
+    def test_sends_whatsapp_message(self, mock_logger, mock_get, *_):
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        notify_pdf_deleted("deleted.pdf", "doc999")
+
+        mock_get.assert_called_once()
+        call_args = mock_get.call_args
+        assert call_args[1]["params"]["phone"] == "+5491112345678"
+        assert call_args[1]["params"]["apikey"] == "apikey123"
+        assert "deleted.pdf" in call_args[1]["params"]["text"]
+        assert "doc999" in call_args[1]["params"]["text"]
+        mock_logger.info.assert_called_once()
+
+    @patch("backend.services.notifications.httpx.get")
+    @patch("backend.services.notifications.CALLMEBOT_API_KEY", "apikey123")
+    @patch("backend.services.notifications.WHATSAPP_TO_NUMBER", "+5491112345678")
+    @patch("backend.services.notifications.logger")
+    def test_handles_api_error_gracefully(self, mock_logger, mock_get, *_):
+        mock_get.side_effect = httpx.RequestError("Connection timeout")
+
+        notify_pdf_deleted("deleted.pdf", "doc999")
+
+        mock_logger.error.assert_called_once()
+        assert "Error de conexion con CallMeBot" in mock_logger.error.call_args[0][0]
+
+    @patch("backend.services.notifications.httpx.get")
+    @patch("backend.services.notifications.CALLMEBOT_API_KEY", "apikey123")
+    @patch("backend.services.notifications.WHATSAPP_TO_NUMBER", "+5491112345678")
+    @patch("backend.services.notifications.logger")
+    def test_message_format_contains_expected_fields(self, mock_logger, mock_get, *_):
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+
+        notify_pdf_deleted("report_2024.pdf", "abc456")
+
+        text = mock_get.call_args[1]["params"]["text"]
+        assert "PDF eliminado de pageyn" in text
+        assert "report_2024.pdf" in text
+        assert "abc456" in text
